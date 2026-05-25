@@ -1,5 +1,5 @@
 trigger=github-actions
 module=hermes-agent-auto
 action=container-health-check
-run_number=3
-note=Start Hermes Agent container check.
+run_number=4
+note=Start Hermes Agent container smoke check and prepare report.
