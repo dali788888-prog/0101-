@@ -1,0 +1,51 @@
+name: Hermes Agent Docker Smoke Test
+
+on:
+  push:
+    paths:
+      - 'hermes-agent-auto/**'
+      - '.github/workflows/hermes-agent-docker-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  docker-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare environment
+        working-directory: hermes-agent-auto
+        run: |
+          cp .env.example .env
+          mkdir -p storage/reports
+          echo "SEARCH_PROVIDER=none" >> .env
+          echo "OLLAMA_BASE_URL=http://127.0.0.1:11434" >> .env
+          echo "OLLAMA_MODEL=hermes3:8b" >> .env
+
+      - name: Build and start Hermes Agent container
+        working-directory: hermes-agent-auto
+        run: docker compose -p hermes_agent_auto_ci up -d --build hermes-agent
+
+      - name: Wait for health endpoint
+        working-directory: hermes-agent-auto
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8099/health; then
+              echo "Hermes Agent health check passed"
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -p hermes_agent_auto_ci logs hermes-agent
+          exit 1
+
+      - name: List runtime containers
+        run: docker ps -a
+
+      - name: Stop Hermes Agent container
+        if: always()
+        working-directory: hermes-agent-auto
+        run: docker compose -p hermes_agent_auto_ci down
