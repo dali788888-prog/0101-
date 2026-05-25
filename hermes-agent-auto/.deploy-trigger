@@ -1,4 +1,5 @@
 trigger=github-actions
 module=hermes-agent-auto
-action=docker-smoke-test
-note=Created to trigger Hermes Agent Docker smoke workflow.
+action=container-health-check
+run_number=3
+note=Start Hermes Agent container check.
