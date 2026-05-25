@@ -1,0 +1,4 @@
+trigger=github-actions
+module=hermes-agent-auto
+action=docker-smoke-test
+note=Created to trigger Hermes Agent Docker smoke workflow.
