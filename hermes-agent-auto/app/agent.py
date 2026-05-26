@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.llm import OllamaClient
 from app.notifier import Notifier
@@ -33,6 +33,8 @@ Output format:
 - Include source list with URLs when available.
 '''.strip()
 
+ProgressCallback = Callable[[str, str, int, Dict[str, Any]], None]
+
 
 class HermesAgent:
     def __init__(self) -> None:
@@ -42,17 +44,46 @@ class HermesAgent:
         self.writer = ReportWriter()
         self.notifier = Notifier()
 
-    def run(self, prompt: str, title: str = 'Hermes Agent Report', max_results: int = 8, notify: bool = False) -> AgentResult:
+    def run(self, prompt: str, title: str = 'Hermes Agent Report', max_results: int = 8, notify: bool = False, progress_callback: Optional[ProgressCallback] = None) -> AgentResult:
+        def emit(event_type: str, message: str, progress: int, data: Optional[Dict[str, Any]] = None) -> None:
+            if progress_callback:
+                progress_callback(event_type, message, progress, data or {})
+
         try:
+            emit('start', f'Starting research: {title}', 3, {'tool': 'agent'})
+            emit('tool_call', f'Calling search provider with max_results={max_results}', 10, {'tool': 'web_search', 'max_results': max_results})
             sources = self.searcher.search(prompt, max_results=max_results)
-            pages = self.reader.read_many(sources) if sources else []
+            emit('tool_result', f'Search returned {len(sources)} source(s)', 25, {'tool': 'web_search', 'sources_count': len(sources), 'sources': sources[:5]})
+
+            pages: List[Dict[str, Any]] = []
+            if sources:
+                for index, source in enumerate(sources, start=1):
+                    progress = 25 + int((index / max(len(sources), 1)) * 25)
+                    emit('tool_call', f'Reading source {index}/{len(sources)}: {source.get("title") or source.get("url")}', progress, {'tool': 'web_reader', 'url': source.get('url')})
+                    page = self.reader.read(source)
+                    pages.append(page)
+                    emit('tool_result', f'Read source {index}/{len(sources)}', progress, {'tool': 'web_reader', 'url': source.get('url'), 'read_error': page.get('read_error'), 'text_chars': len(page.get('text', ''))})
+            else:
+                emit('warn', 'No sources returned. The report will be based on task planning and available context.', 45, {'tool': 'web_search'})
+
+            emit('tool_call', 'Calling Ollama model for report synthesis', 62, {'tool': 'ollama', 'model': self.llm.settings.ollama_model})
             report = self._summarize(prompt, pages)
+            emit('tool_result', 'Model finished report synthesis', 82, {'tool': 'ollama', 'report_chars': len(report)})
+
+            emit('tool_call', 'Writing Markdown report to storage', 88, {'tool': 'report_writer'})
             report = self._add_header(title, prompt, report, pages)
             path = self.writer.write(title, report)
+            emit('tool_result', f'Report written: {path}', 94, {'tool': 'report_writer', 'report_path': path})
+
             if notify:
+                emit('tool_call', 'Sending notification', 96, {'tool': 'notifier'})
                 self.notifier.notify(f'Hermes Agent finished: {title}', report, {'report_path': path})
+                emit('tool_result', 'Notification sent', 98, {'tool': 'notifier'})
+
+            emit('success', 'Research run completed successfully', 100, {'report_path': path, 'sources_count': len(pages)})
             return AgentResult(title=title, prompt=prompt, status='success', report_markdown=report, report_path=path, sources=pages)
         except Exception as exc:  # noqa: BLE001
+            emit('error', f'{type(exc).__name__}: {exc}', 100, {'error': str(exc)})
             error_report = self._error_report(title, prompt, exc)
             path = self.writer.write(f'{title}-ERROR', error_report)
             if notify:
