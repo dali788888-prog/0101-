@@ -1,5 +1,5 @@
-trigger=github-actions
+trigger=self-hosted-runner
 module=hermes-agent-auto
-action=container-health-check
-run_number=4
-note=Start Hermes Agent container smoke check and prepare report.
+action=start-and-health-check
+run_number=5
+note=Start Hermes Agent on self-hosted runner and verify health endpoint.
