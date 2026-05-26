@@ -40,30 +40,10 @@ def health() -> dict:
 
 @app.get('/', response_class=HTMLResponse)
 def index() -> str:
-    return '''
-<!doctype html>
-<html>
-<head><title>Hermes Agent</title><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:Arial;margin:40px;max-width:980px}textarea,input{width:100%;padding:10px;margin:6px 0}button{padding:10px 16px}pre{background:#f4f4f4;padding:14px;white-space:pre-wrap}</style></head>
-<body>
-<h1>Hermes Agent Auto Executor</h1>
-<p>Local-first autonomous public-source research and scheduled reporting.</p>
-<h2>Run once</h2>
-<input id="title" value="Hermes Agent Report">
-<textarea id="prompt" rows="6">搜索公开资料并输出中文报告，标注来源。</textarea>
-<input id="max" value="8">
-<button onclick="runOnce()">Run</button>
-<h2>Create scheduled task</h2>
-<input id="taskTitle" value="OKX public research">
-<textarea id="taskPrompt" rows="6">每2小时搜索公开资料：OKX Web3 钱包/API/SDK/流动性挖矿项目对接要求，输出中文更新报告，标注来源。</textarea>
-<input id="minutes" value="120">
-<button onclick="createTask()">Create task</button>
-<h2>Output</h2><pre id="out"></pre>
-<script>
-async function runOnce(){let r=await fetch('/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:title.value,prompt:prompt.value,max_results:parseInt(max.value)})});out.textContent=JSON.stringify(await r.json(),null,2)}
-async function createTask(){let r=await fetch('/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:taskTitle.value,prompt:taskPrompt.value,interval_minutes:parseInt(minutes.value),max_results:8,run_now:true})});out.textContent=JSON.stringify(await r.json(),null,2)}
-</script>
-</body></html>
-'''
+    ui_path = Path(__file__).with_name('ui.html')
+    if ui_path.exists():
+        return ui_path.read_text(encoding='utf-8')
+    return '<h1>Hermes Agent Auto Executor</h1><p>UI file not found.</p>'
 
 
 @app.post('/run', response_model=AgentResult, dependencies=[Depends(require_key)])
