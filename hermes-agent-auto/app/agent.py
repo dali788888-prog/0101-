@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from app.llm import OllamaClient
@@ -11,7 +12,7 @@ from app.tools.report_writer import ReportWriter
 from app.tools.web_reader import WebReader
 from app.tools.web_search import WebSearch
 
-SYSTEM_PROMPT = '''
+BASE_SYSTEM_PROMPT = '''
 You are Hermes Agent, a local-first autonomous research and reporting agent.
 
 Mission:
@@ -33,6 +34,25 @@ Output format:
 - Include source list with URLs when available.
 '''.strip()
 
+
+def load_soul_core() -> str:
+    candidates = [
+        Path(__file__).resolve().parents[1] / 'SOUL.md',
+        Path('/app/SOUL.md'),
+    ]
+    for path in candidates:
+        if path.exists():
+            return path.read_text(encoding='utf-8')
+    return ''
+
+
+def build_system_prompt() -> str:
+    soul = load_soul_core().strip()
+    if not soul:
+        return BASE_SYSTEM_PROMPT
+    return BASE_SYSTEM_PROMPT + '\n\n---\n\nRuntime identity and workflow overlay from SOUL.md:\n\n' + soul
+
+
 ProgressCallback = Callable[[str, str, int, Dict[str, Any]], None]
 
 
@@ -43,6 +63,7 @@ class HermesAgent:
         self.llm = OllamaClient()
         self.writer = ReportWriter()
         self.notifier = Notifier()
+        self.system_prompt = build_system_prompt()
 
     def run(self, prompt: str, title: str = 'Hermes Agent Report', max_results: int = 8, notify: bool = False, progress_callback: Optional[ProgressCallback] = None) -> AgentResult:
         def emit(event_type: str, message: str, progress: int, data: Optional[Dict[str, Any]] = None) -> None:
@@ -101,7 +122,7 @@ class HermesAgent:
             user = f'''用户任务：\n{prompt}\n\n当前没有配置搜索供应商或没有搜索结果。请基于用户提供的任务生成执行计划、资料清单、对接步骤和下一步配置建议，明确说明缺少实时互联网搜索结果。'''
 
         return self.llm.chat([
-            {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'system', 'content': self.system_prompt},
             {'role': 'user', 'content': user},
         ])
 
