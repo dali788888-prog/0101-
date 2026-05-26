@@ -1,5 +1,6 @@
 trigger=self-hosted-runner
 module=hermes-agent-auto
-action=start-and-health-check
-run_number=5
-note=Start Hermes Agent on self-hosted runner and verify health endpoint.
+action=health-check-only
+run_number=6
+endpoint=http://127.0.0.1:8099/health
+note=Verify Hermes Agent health endpoint on the self-hosted runner.
