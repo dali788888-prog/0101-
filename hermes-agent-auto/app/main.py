@@ -42,17 +42,23 @@ app.include_router(asset_os_router)
 
 @app.get('/health')
 def health() -> dict:
-    return {'status': 'ok', 'app': settings.app_name, 'search_provider': settings.search_provider, 'model': settings.ollama_model, 'version': '10.1-token-watchtower'}
+    return {'status': 'ok', 'app': settings.app_name, 'search_provider': settings.search_provider, 'model': settings.ollama_model, 'version': '10.2-unified-sidebar-home'}
 
 
 @app.get('/', response_class=HTMLResponse)
 def index() -> str:
+    ui_path = Path(__file__).with_name('home_ui.html')
+    if ui_path.exists():
+        return ui_path.read_text(encoding='utf-8')
+    return '<h1>Hermes AssetOps OS</h1><p>home_ui.html not found.</p>'
+
+
+@app.get('/legacy-ui', response_class=HTMLResponse)
+def legacy_ui() -> str:
     ui_path = Path(__file__).with_name('ui.html')
     if ui_path.exists():
-        html = ui_path.read_text(encoding='utf-8')
-        button = '''<div style="max-width:1540px;margin:18px auto 0;padding:0 28px;display:flex;gap:10px;flex-wrap:wrap"><a href="/asset-os-ui" style="display:inline-block;padding:12px 16px;border-radius:999px;background:#5b8cff;color:white;text-decoration:none;font-weight:800">打开 AssetOps OS v10.1</a><a href="/tron-ui" style="display:inline-block;padding:12px 16px;border-radius:999px;background:rgba(255,255,255,.09);color:white;text-decoration:none;font-weight:800;border:1px solid rgba(255,255,255,.1)">打开 TRON 权限管理</a></div>'''
-        return html.replace('<body>', '<body>' + button, 1)
-    return '<h1>Hermes Agent Auto Executor</h1><p>UI file not found.</p><p><a href="/asset-os-ui">Open AssetOps OS</a></p>'
+        return ui_path.read_text(encoding='utf-8')
+    return '<h1>Legacy UI file not found.</h1>'
 
 
 @app.get('/asset-os-ui', response_class=HTMLResponse)
