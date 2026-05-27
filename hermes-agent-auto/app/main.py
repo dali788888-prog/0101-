@@ -13,7 +13,8 @@ from app.agent import HermesAgent
 from app.config import get_settings
 from app.runtime import run_store
 from app.scheduler import HermesScheduler
-from app.schemas import AgentResult, RunRequest, TaskCreate, TaskOut
+from app.schemas import AgentResult, MultisigPlanRequest, RunRequest, TaskCreate, TaskOut, WalletMonitorCreate, WalletMonitorOut, WalletRefreshResult
+from app.wallets import create_multisig_plan, refresh_all_wallet_monitors, refresh_wallet_monitor_by_id
 
 settings = get_settings()
 scheduler = HermesScheduler()
@@ -119,6 +120,45 @@ def events(run_id: Optional[str] = None):
 @app.get('/events_snapshot')
 def events_snapshot(last_id: int = 0, run_id: Optional[str] = None) -> list[dict]:
     return run_store.events_after(last_id=last_id, run_id=run_id)
+
+
+@app.post('/multisig/plan', dependencies=[Depends(require_key)])
+def multisig_plan(req: MultisigPlanRequest) -> dict:
+    try:
+        return create_multisig_plan(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post('/wallet-monitors', response_model=WalletMonitorOut, dependencies=[Depends(require_key)])
+def create_wallet_monitor(req: WalletMonitorCreate) -> WalletMonitorOut:
+    try:
+        monitor = db.create_wallet_monitor(req)
+        refresh_wallet_monitor_by_id(monitor.id)
+        refreshed = db.get_wallet_monitor(monitor.id)
+        return refreshed or monitor
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get('/wallet-monitors', response_model=List[WalletMonitorOut])
+def wallet_monitors() -> List[WalletMonitorOut]:
+    return db.list_wallet_monitors()
+
+
+@app.post('/wallet-monitors/{monitor_id}/refresh', response_model=WalletRefreshResult, dependencies=[Depends(require_key)])
+def refresh_wallet_monitor(monitor_id: int) -> WalletRefreshResult:
+    return refresh_wallet_monitor_by_id(monitor_id)
+
+
+@app.post('/wallet-monitors/refresh-all', dependencies=[Depends(require_key)])
+def refresh_wallet_monitors() -> list[WalletRefreshResult]:
+    return refresh_all_wallet_monitors()
+
+
+@app.get('/wallet-alerts')
+def wallet_alerts(limit: int = 50) -> list[dict]:
+    return db.list_wallet_alerts(limit=limit)
 
 
 @app.get('/reports')
