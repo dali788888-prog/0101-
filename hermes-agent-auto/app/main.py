@@ -11,6 +11,7 @@ from app import db
 from app.asset_os import router as asset_os_router
 from app.asset_ext import router as asset_ext_router
 from app.quant_bot import router as quant_bot_router
+from app.quant_ext import router as quant_ext_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -32,6 +33,7 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.include_router(asset_os_router)
 app.include_router(asset_ext_router)
 app.include_router(quant_bot_router)
+app.include_router(quant_ext_router)
 
 
 @app.get('/health')
@@ -41,7 +43,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '10.4-quant-ai-robot',
+        'version': '10.5-advanced-quant-controls',
     }
 
 
