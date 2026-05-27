@@ -45,7 +45,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '10.7-public-market-autopilot',
+        'version': '10.8-quant-autopilot-ui',
     }
 
 
