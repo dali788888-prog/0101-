@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.config import get_settings
-from app.schemas import TaskCreate, TaskOut
+from app.schemas import TaskCreate, TaskOut, WalletMonitorCreate, WalletMonitorOut
 
 
 def utcnow() -> str:
@@ -60,6 +60,38 @@ def init_db() -> None:
             created_at TEXT NOT NULL
         )
         ''')
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS wallet_monitors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT NOT NULL,
+            chain TEXT NOT NULL,
+            address TEXT NOT NULL,
+            rpc_url TEXT,
+            poll_minutes INTEGER NOT NULL DEFAULT 5,
+            alert_on_change INTEGER NOT NULL DEFAULT 1,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_checked_at TEXT,
+            last_block INTEGER,
+            last_balance_wei TEXT,
+            last_balance_native TEXT,
+            last_status TEXT,
+            last_error TEXT
+        )
+        ''')
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS wallet_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            monitor_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            message TEXT NOT NULL,
+            previous_balance_wei TEXT,
+            current_balance_wei TEXT,
+            block_number INTEGER,
+            created_at TEXT NOT NULL
+        )
+        ''')
 
 
 def row_to_task(row: sqlite3.Row) -> TaskOut:
@@ -109,3 +141,60 @@ def record_run(task_id: Optional[int], title: str, prompt: str, status: str, rep
         INSERT INTO runs (task_id, title, prompt, status, report_path, sources_json, error, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (task_id, title, prompt, status, report_path, json.dumps(sources, ensure_ascii=False), error, utcnow()))
+
+
+def row_to_wallet_monitor(row: sqlite3.Row) -> WalletMonitorOut:
+    return WalletMonitorOut(
+        id=row['id'], label=row['label'], chain=row['chain'], address=row['address'], rpc_url=row['rpc_url'],
+        poll_minutes=row['poll_minutes'], alert_on_change=bool(row['alert_on_change']), enabled=bool(row['enabled']),
+        created_at=row['created_at'], updated_at=row['updated_at'], last_checked_at=row['last_checked_at'],
+        last_block=row['last_block'], last_balance_wei=row['last_balance_wei'], last_balance_native=row['last_balance_native'],
+        last_status=row['last_status'], last_error=row['last_error'],
+    )
+
+
+def create_wallet_monitor(req: WalletMonitorCreate) -> WalletMonitorOut:
+    now = utcnow()
+    with connect() as conn:
+        cur = conn.execute('''
+        INSERT INTO wallet_monitors (label, chain, address, rpc_url, poll_minutes, alert_on_change, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (req.label, req.chain, req.address, req.rpc_url, req.poll_minutes, int(req.alert_on_change), int(req.enabled), now, now))
+        monitor_id = int(cur.lastrowid)
+        row = conn.execute('SELECT * FROM wallet_monitors WHERE id=?', (monitor_id,)).fetchone()
+        return row_to_wallet_monitor(row)
+
+
+def list_wallet_monitors() -> List[WalletMonitorOut]:
+    with connect() as conn:
+        rows = conn.execute('SELECT * FROM wallet_monitors ORDER BY id DESC').fetchall()
+        return [row_to_wallet_monitor(row) for row in rows]
+
+
+def get_wallet_monitor(monitor_id: int) -> Optional[WalletMonitorOut]:
+    with connect() as conn:
+        row = conn.execute('SELECT * FROM wallet_monitors WHERE id=?', (monitor_id,)).fetchone()
+        return row_to_wallet_monitor(row) if row else None
+
+
+def update_wallet_monitor_state(monitor_id: int, *, status: str, block_number: Optional[int], balance_wei: Optional[str], balance_native: Optional[str], error: Optional[str]) -> None:
+    with connect() as conn:
+        conn.execute('''
+        UPDATE wallet_monitors
+        SET last_checked_at=?, last_block=?, last_balance_wei=?, last_balance_native=?, last_status=?, last_error=?, updated_at=?
+        WHERE id=?
+        ''', (utcnow(), block_number, balance_wei, balance_native, status, error, utcnow(), monitor_id))
+
+
+def record_wallet_alert(monitor_id: int, event_type: str, message: str, previous_balance_wei: Optional[str], current_balance_wei: Optional[str], block_number: Optional[int]) -> None:
+    with connect() as conn:
+        conn.execute('''
+        INSERT INTO wallet_alerts (monitor_id, event_type, message, previous_balance_wei, current_balance_wei, block_number, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (monitor_id, event_type, message, previous_balance_wei, current_balance_wei, block_number, utcnow()))
+
+
+def list_wallet_alerts(limit: int = 50) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute('SELECT * FROM wallet_alerts ORDER BY id DESC LIMIT ?', (limit,)).fetchall()
+        return [dict(row) for row in rows]
