@@ -53,6 +53,14 @@ def index() -> str:
     return '<h1>Hermes Agent Auto Executor</h1><p>UI file not found.</p>'
 
 
+@app.get('/asset-os-ui', response_class=HTMLResponse)
+def asset_os_ui() -> str:
+    ui_path = Path(__file__).with_name('asset_os_ui.html')
+    if ui_path.exists():
+        return ui_path.read_text(encoding='utf-8')
+    return '<h1>AssetOps OS UI file not found.</h1>'
+
+
 @app.get('/tron-ui', response_class=HTMLResponse)
 def tron_ui() -> str:
     ui_path = Path(__file__).with_name('tron_ui.html')
