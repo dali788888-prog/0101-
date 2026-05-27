@@ -13,6 +13,7 @@ from app.asset_ext import router as asset_ext_router
 from app.quant_bot import router as quant_bot_router
 from app.quant_ext import router as quant_ext_router
 from app.quant_market import router as quant_market_router
+from app.quant_live_predict import router as quant_live_predict_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -36,6 +37,7 @@ app.include_router(asset_ext_router)
 app.include_router(quant_bot_router)
 app.include_router(quant_ext_router)
 app.include_router(quant_market_router)
+app.include_router(quant_live_predict_router)
 
 
 @app.get('/health')
@@ -45,7 +47,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '10.8-quant-autopilot-ui',
+        'version': '10.9-live-gate-prediction-alerts',
     }
 
 
