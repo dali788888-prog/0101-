@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from app import db
 from app.asset_os import router as asset_os_router
 from app.asset_ext import router as asset_ext_router
+from app.quant_bot import router as quant_bot_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.include_router(asset_os_router)
 app.include_router(asset_ext_router)
+app.include_router(quant_bot_router)
 
 
 @app.get('/health')
@@ -39,7 +41,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '10.3-complete-ops',
+        'version': '10.4-quant-ai-robot',
     }
 
 
@@ -55,7 +57,7 @@ def index() -> str:
 
 @app.get('/legacy-ui', response_class=HTMLResponse)
 def legacy_ui() -> str:
-    return html_file('ui.html', '<h1>Legacy UI file not found.</h1>')
+    return '<h1>Legacy UI disabled</h1><p>已取消旧版入口，请使用首页侧边栏。</p>'
 
 
 @app.get('/asset-os-ui', response_class=HTMLResponse)
@@ -66,6 +68,11 @@ def asset_os_ui() -> str:
 @app.get('/tron-ui', response_class=HTMLResponse)
 def tron_ui() -> str:
     return html_file('tron_ui.html', '<h1>TRON UI file not found.</h1>')
+
+
+@app.get('/quant-ui', response_class=HTMLResponse)
+def quant_ui() -> str:
+    return html_file('quant_ui.html', '<h1>Quant AI Robot UI file not found.</h1>')
 
 
 @app.post('/tron/permissions', response_model=TronPermissionDraftOut)
