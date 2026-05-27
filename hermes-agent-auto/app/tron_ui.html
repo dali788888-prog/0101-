@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hermes TRON Account Permission 控制台</title>
+<style>
+:root{--bg:#070b16;--panel:#111a2e;--text:#eef3ff;--muted:#93a4c7;--line:rgba(255,255,255,.1);--good:#16c784;--warn:#f5b841;--bad:#ff5c7a;--blue:#5b8cff;--purple:#9b7bff;--shadow:0 18px 60px rgba(0,0,0,.35)}*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,"Microsoft YaHei",Arial,sans-serif;background:radial-gradient(circle at top left,#1b2d5d 0,transparent 34%),var(--bg);color:var(--text)}.shell{max-width:1280px;margin:0 auto;padding:28px}.top{display:flex;justify-content:space-between;gap:18px;align-items:center;margin-bottom:22px}.top h1{margin:0;font-size:32px}.top p{margin:8px 0 0;color:var(--muted)}.panel{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow);padding:18px;margin-bottom:18px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}label{display:block;color:var(--muted);font-size:13px;margin-bottom:7px}input,textarea,select{width:100%;border:1px solid var(--line);background:rgba(0,0,0,.22);color:var(--text);border-radius:12px;padding:12px 13px;font-size:14px;outline:none}textarea{min-height:110px;resize:vertical;line-height:1.55}button{border:0;border-radius:12px;padding:11px 14px;color:white;background:var(--blue);font-weight:750;cursor:pointer}button.secondary{background:rgba(255,255,255,.09);border:1px solid var(--line)}button.danger{background:#9f2241}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}.list{display:flex;flex-direction:column;gap:10px;max-height:520px;overflow:auto}.item{border:1px solid var(--line);border-radius:14px;padding:13px;background:rgba(0,0,0,.14)}.item-title{display:flex;justify-content:space-between;gap:10px;align-items:center;font-weight:800}.item-meta{color:var(--muted);font-size:12px;margin-top:7px;line-height:1.5}.badge{padding:4px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line);color:var(--muted)}.ok{color:var(--good)}.warn{color:var(--warn)}.bad{color:var(--bad)}pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:16px;padding:16px;max-height:520px;overflow:auto;color:#dfe8ff}.muted{color:var(--muted)}.toast{position:fixed;right:22px;bottom:22px;background:#111827;border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow);display:none;max-width:420px}@media(max-width:900px){.grid,.row{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top"><div><h1>TRON Account Permission Management ⚡</h1><p>TRC20/TRON 权限草稿、Owner/Active 权限、Threshold/Weight、审批、Payload 与执行哈希审计。</p></div><a style="color:#93a4c7" href="/">返回总台</a></div>
+  <div class="grid">
+    <div>
+      <div class="panel"><h2>创建 TRON 权限草稿</h2>
+        <label>草稿名称</label><input id="name" value="TRON Treasury Permission Draft">
+        <label style="margin-top:12px">账户地址，T 开头</label><input id="account" placeholder="T...">
+        <div class="row" style="margin-top:12px"><div><label>Owner Threshold</label><input id="ownerThreshold" type="number" min="1" value="1"></div><div><label>Active Threshold</label><input id="activeThreshold" type="number" min="1" value="2"></div></div>
+        <label style="margin-top:12px">Owner Keys，每行：地址,权重；可留空表示不改 Owner</label><textarea id="ownerKeys" placeholder="T...,1&#10;T...,1"></textarea>
+        <label style="margin-top:12px">Active Keys，每行：地址,权重</label><textarea id="activeKeys" placeholder="T...,1&#10;T...,1&#10;T...,1"></textarea>
+        <label style="margin-top:12px">Active Permission Name</label><input id="permName" value="asset-ops">
+        <label style="margin-top:12px">Operations Hex</label><textarea id="ops">7fff1fc0033e000000000000000000000000000000000000000000000000000000000000</textarea>
+        <label style="margin-top:12px">风险备注</label><input id="note" placeholder="用途、审批说明、回滚预案">
+        <div class="actions"><button onclick="createDraft()">创建草稿</button><button class="secondary" onclick="loadAll()">刷新</button></div>
+      </div>
+      <div class="panel"><h2>审批 / 执行记录</h2>
+        <div class="row"><div><label>Draft ID</label><input id="draftId" type="number" value="1"></div><div><label>Operator</label><input id="operator" value="local-operator"></div></div>
+        <label style="margin-top:12px">备注 / 执行交易哈希</label><textarea id="opData"></textarea>
+        <div class="actions"><button onclick="approveDraft()">批准</button><button class="danger" onclick="rejectDraft()">拒绝</button><button class="secondary" onclick="payload()">查看 Payload</button><button class="secondary" onclick="markExecuted()">标记执行</button></div>
+      </div>
+      <div class="panel"><h2>输出</h2><pre id="out">等待操作...</pre></div>
+    </div>
+    <div>
+      <div class="panel"><h2>TRON 权限草稿列表</h2><div id="list" class="list"><div class="muted">加载中...</div></div></div>
+      <div class="panel"><h2>审计事件</h2><div id="audit" class="list"><div class="muted">加载中...</div></div></div>
+    </div>
+  </div>
+</div><div id="toast" class="toast"></div>
+<script>
+const headers={'Content-Type':'application/json'};function show(o){out.textContent=typeof o==='string'?o:JSON.stringify(o,null,2)}function toast(m){const t=document.getElementById('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',3500)}function esc(s){return String(s||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}function cls(s){return s==='approved'||s==='executed'?'ok':s==='rejected'?'bad':'warn'}async function api(p,o={}){const r=await fetch(p,o);const text=await r.text();let d;try{d=JSON.parse(text)}catch{d=text}if(!r.ok)throw new Error(typeof d==='string'?d:JSON.stringify(d));return d}function parseKeys(v){return v.split(/\r?\n/).map(x=>x.trim()).filter(Boolean).map(line=>{const [address,weight]=line.split(',').map(x=>x.trim());return {address,weight:parseInt(weight||'1')}})}
+async function createDraft(){try{const body={name:name.value,account_address:account.value,owner_keys:parseKeys(ownerKeys.value),owner_threshold:parseInt(ownerThreshold.value||'1'),active_keys:parseKeys(activeKeys.value),active_threshold:parseInt(activeThreshold.value||'2'),active_permission_name:permName.value,operations_hex:ops.value,risk_note:note.value};const d=await api('/tron/permissions',{method:'POST',headers,body:JSON.stringify(body)});show(d);toast('TRON 权限草稿已创建');loadAll()}catch(e){show(e.message)}}
+async function loadAll(){try{const drafts=await api('/tron/permissions');list.innerHTML=drafts.length?drafts.map(x=>`<div class="item"><div class="item-title"><span>${esc(x.name)}</span><span class="badge ${cls(x.approval_state)}">${esc(x.approval_state)}</span></div><div class="item-meta">ID:${x.id} · ${esc(x.account_address)}<br>Owner threshold:${x.owner_threshold} · Active threshold:${x.active_threshold}<br>Risk:${esc(x.risk_tier)} · Exec:${esc(x.execution_tx_hash||'未执行')}<br>${esc(x.risk_note)}</div></div>`).join(''):'<div class="muted">暂无草稿</div>';const audits=await api('/audit-events');audit.innerHTML=audits.length?audits.filter(a=>String(a.entity_type).includes('tron')||String(a.event_type).includes('tron')).map(a=>`<div class="item"><div class="item-title"><span>${esc(a.event_type)}</span><span class="badge ${cls(a.approval_state)}">${esc(a.approval_state)}</span></div><div class="item-meta">${esc(a.entity_type)}:${esc(a.entity_id)} · ${esc(a.risk_tier)}<br>${esc(a.created_at)}</div></div>`).join(''):'<div class="muted">暂无 TRON 审计</div>'}catch(e){show(e.message)}}
+async function payload(){try{show(await api('/tron/permissions/'+parseInt(draftId.value||'1')+'/payload'))}catch(e){show(e.message)}}async function approveDraft(){decision('approved')}async function rejectDraft(){decision('rejected')}async function decision(d){try{const qs=new URLSearchParams({decision:d,operator:operator.value,note:opData.value});show(await api('/tron/permissions/'+parseInt(draftId.value||'1')+'/approve?'+qs.toString(),{method:'POST'}));toast('审批已记录');loadAll()}catch(e){show(e.message)}}async function markExecuted(){try{show(await api('/tron/permissions/mark-executed',{method:'POST',headers,body:JSON.stringify({draft_id:parseInt(draftId.value||'1'),execution_tx_hash:opData.value,note:'marked from UI'})}));toast('执行哈希已记录');loadAll()}catch(e){show(e.message)}}loadAll();setInterval(loadAll,10000);
+</script>
+</body></html>
