@@ -83,6 +83,11 @@ def quant_ui() -> str:
     return html_file('quant_ui.html', '<h1>Quant AI Robot UI file not found.</h1>')
 
 
+@app.get('/quant-risk-ui', response_class=HTMLResponse)
+def quant_risk_ui() -> str:
+    return html_file('quant_risk_ui.html', '<h1>Quant Risk UI file not found.</h1>')
+
+
 @app.post('/tron/permissions', response_model=TronPermissionDraftOut)
 def create_tron_permission(req: TronPermissionDraftCreate) -> TronPermissionDraftOut:
     try:
