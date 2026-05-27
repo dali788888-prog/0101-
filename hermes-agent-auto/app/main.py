@@ -12,8 +12,9 @@ from app import db
 from app.agent import HermesAgent
 from app.config import get_settings
 from app.runtime import run_store
+from app.safe_ops import approve_tx, build_safe_tx_payload, create_tx_draft, mark_executed, record_signature, register_safe
 from app.scheduler import HermesScheduler
-from app.schemas import AgentResult, MultisigPlanRequest, RunRequest, TaskCreate, TaskOut, WalletMonitorCreate, WalletMonitorOut, WalletRefreshResult
+from app.schemas import ApprovalRequest, AgentResult, MultisigPlanRequest, RunRequest, SafeExecutionMark, SafeRegistryCreate, SafeRegistryOut, SafeSignRequest, SafeTxDraftCreate, SafeTxDraftOut, TaskCreate, TaskOut, WalletMonitorCreate, WalletMonitorOut, WalletRefreshResult
 from app.wallets import create_multisig_plan, refresh_all_wallet_monitors, refresh_wallet_monitor_by_id
 
 settings = get_settings()
@@ -38,7 +39,7 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 @app.get('/health')
 def health() -> dict:
-    return {'status': 'ok', 'app': settings.app_name, 'search_provider': settings.search_provider, 'model': settings.ollama_model}
+    return {'status': 'ok', 'app': settings.app_name, 'search_provider': settings.search_provider, 'model': settings.ollama_model, 'version': '2.0-asset-ops'}
 
 
 @app.get('/', response_class=HTMLResponse)
@@ -63,13 +64,7 @@ def _run_with_events(run_id: str, title: str, prompt: str, max_results: int, not
 @app.post('/run', response_model=AgentResult, dependencies=[Depends(require_key)])
 def run(req: RunRequest) -> AgentResult:
     run_id = run_store.create_run(req.title, req.prompt, kind='manual')
-    result = HermesAgent().run(
-        req.prompt,
-        title=req.title,
-        max_results=req.max_results,
-        notify=req.notify,
-        progress_callback=lambda event_type, message, progress, data: run_store.emit(run_id, event_type, message, progress=progress, data=data),
-    )
+    result = HermesAgent().run(req.prompt, title=req.title, max_results=req.max_results, notify=req.notify, progress_callback=lambda event_type, message, progress, data: run_store.emit(run_id, event_type, message, progress=progress, data=data))
     db.record_run(None, req.title, req.prompt, result.status, result.report_path, result.sources, result.error)
     run_store.finish(run_id, result.status, report_path=result.report_path, error=result.error, sources_count=len(result.sources))
     return result
@@ -159,6 +154,69 @@ def refresh_wallet_monitors() -> list[WalletRefreshResult]:
 @app.get('/wallet-alerts')
 def wallet_alerts(limit: int = 50) -> list[dict]:
     return db.list_wallet_alerts(limit=limit)
+
+
+@app.post('/safes', response_model=SafeRegistryOut, dependencies=[Depends(require_key)])
+def create_safe_registry(req: SafeRegistryCreate) -> SafeRegistryOut:
+    try:
+        return register_safe(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get('/safes', response_model=List[SafeRegistryOut])
+def safes() -> List[SafeRegistryOut]:
+    return db.list_safes()
+
+
+@app.post('/safe-txs', response_model=SafeTxDraftOut, dependencies=[Depends(require_key)])
+def create_safe_tx(req: SafeTxDraftCreate) -> SafeTxDraftOut:
+    try:
+        return create_tx_draft(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get('/safe-txs', response_model=List[SafeTxDraftOut])
+def safe_txs() -> List[SafeTxDraftOut]:
+    return db.list_safe_txs()
+
+
+@app.get('/safe-txs/{tx_id}/payload')
+def safe_tx_payload(tx_id: int) -> dict:
+    try:
+        return build_safe_tx_payload(tx_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post('/safe-txs/approve', dependencies=[Depends(require_key)])
+def approve_safe_tx(req: ApprovalRequest) -> dict:
+    try:
+        return approve_tx(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post('/safe-txs/signature', dependencies=[Depends(require_key)])
+def add_safe_signature(req: SafeSignRequest) -> dict:
+    try:
+        return record_signature(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post('/safe-txs/mark-executed', dependencies=[Depends(require_key)])
+def mark_safe_tx_executed(req: SafeExecutionMark) -> dict:
+    try:
+        return mark_executed(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get('/audit-events')
+def audit_events(limit: int = 100) -> list[dict]:
+    return db.list_audit_events(limit=limit)
 
 
 @app.get('/reports')
