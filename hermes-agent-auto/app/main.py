@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 
 from app import db
 from app.agent import HermesAgent
+from app.asset_os import router as asset_os_router
 from app.config import get_settings
 from app.runtime import run_store
 from app.safe_ops import approve_tx, build_safe_tx_payload, create_tx_draft, mark_executed, record_signature, register_safe
@@ -36,11 +37,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app.include_router(asset_os_router)
 
 
 @app.get('/health')
 def health() -> dict:
-    return {'status': 'ok', 'app': settings.app_name, 'search_provider': settings.search_provider, 'model': settings.ollama_model, 'version': '2.1-tron-permissions'}
+    return {'status': 'ok', 'app': settings.app_name, 'search_provider': settings.search_provider, 'model': settings.ollama_model, 'version': '10.0-assetops-os'}
 
 
 @app.get('/', response_class=HTMLResponse)
