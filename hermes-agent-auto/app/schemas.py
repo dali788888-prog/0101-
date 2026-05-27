@@ -174,3 +174,45 @@ class SafeExecutionMark(BaseModel):
     tx_id: int
     execution_tx_hash: str = Field(..., min_length=10)
     note: str = ''
+
+
+class TronPermissionKey(BaseModel):
+    address: str = Field(..., min_length=10)
+    weight: int = Field(default=1, ge=1)
+
+
+class TronPermissionDraftCreate(BaseModel):
+    name: str = Field(default='TRON Account Permission Draft', min_length=2)
+    account_address: str = Field(..., min_length=10)
+    owner_keys: List[TronPermissionKey] = Field(default=[])
+    owner_threshold: int = Field(default=1, ge=1)
+    active_keys: List[TronPermissionKey] = Field(default=[])
+    active_threshold: int = Field(default=2, ge=1)
+    active_permission_name: str = 'asset-ops'
+    operations_hex: str = '7fff1fc0033e000000000000000000000000000000000000000000000000000000000000'
+    risk_note: str = ''
+
+
+class TronPermissionDraftOut(BaseModel):
+    id: int
+    name: str
+    account_address: str
+    owner_threshold: int
+    owner_keys_json: str
+    active_threshold: int
+    active_keys_json: str
+    active_permission_name: str
+    operations_hex: str
+    risk_tier: str
+    approval_state: str
+    payload_json: str
+    execution_tx_hash: Optional[str] = None
+    risk_note: str
+    created_at: str
+    updated_at: str
+
+
+class TronPermissionExecutionMark(BaseModel):
+    draft_id: int
+    execution_tx_hash: str = Field(..., min_length=10)
+    note: str = ''
