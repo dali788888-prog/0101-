@@ -5,6 +5,7 @@ import json
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+import requests
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
@@ -12,6 +13,9 @@ from app import db
 from app.config import get_settings
 
 router = APIRouter(prefix='/asset-os', tags=['Hermes AssetOps OS v10'])
+
+TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
+BALANCE_OF_SELECTOR = '0x70a08231'
 
 
 def require_asset_key(x_hermes_api_key: str = Header(default='')) -> None:
@@ -87,6 +91,23 @@ class EvidenceCreate(BaseModel):
     risk_tier: str = 'medium'
 
 
+class TokenMonitorCreate(BaseModel):
+    wallet_id: int
+    token_standard: str = Field(default='trc20')
+    token_contract: Optional[str] = None
+    token_symbol: str = Field(default='USDT')
+    decimals: int = Field(default=6, ge=0, le=36)
+    poll_minutes: int = Field(default=5, ge=1)
+    enabled: bool = True
+
+
+class TxEventSyncRequest(BaseModel):
+    wallet_id: int
+    token_monitor_id: Optional[int] = None
+    lookback_blocks: int = Field(default=5000, ge=1, le=100000)
+    limit: int = Field(default=30, ge=1, le=200)
+
+
 def ensure_tables() -> None:
     with db.connect() as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS asset_os_chains (id INTEGER PRIMARY KEY AUTOINCREMENT, chain TEXT NOT NULL UNIQUE, chain_type TEXT NOT NULL, rpc_url TEXT, explorer_url TEXT, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)''')
@@ -96,6 +117,8 @@ def ensure_tables() -> None:
         conn.execute('''CREATE TABLE IF NOT EXISTS asset_os_approvals (id INTEGER PRIMARY KEY AUTOINCREMENT, tx_id INTEGER NOT NULL, operator TEXT NOT NULL, decision TEXT NOT NULL, note TEXT, created_at TEXT NOT NULL)''')
         conn.execute('''CREATE TABLE IF NOT EXISTS asset_os_evidence (id INTEGER PRIMARY KEY AUTOINCREMENT, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, title TEXT NOT NULL, content TEXT, source_ref TEXT, evidence_hash TEXT NOT NULL, risk_tier TEXT NOT NULL, created_at TEXT NOT NULL)''')
         conn.execute('''CREATE TABLE IF NOT EXISTS asset_os_alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, alert_type TEXT NOT NULL, severity TEXT NOT NULL, message TEXT NOT NULL, entity_type TEXT, entity_id TEXT, status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS asset_os_token_monitors (id INTEGER PRIMARY KEY AUTOINCREMENT, wallet_id INTEGER NOT NULL, token_standard TEXT NOT NULL, token_contract TEXT, token_symbol TEXT NOT NULL, decimals INTEGER NOT NULL, poll_minutes INTEGER NOT NULL DEFAULT 5, enabled INTEGER NOT NULL DEFAULT 1, last_checked_at TEXT, last_balance_raw TEXT, last_balance TEXT, last_status TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS asset_os_tx_events (id INTEGER PRIMARY KEY AUTOINCREMENT, wallet_id INTEGER NOT NULL, chain TEXT NOT NULL, wallet_address TEXT NOT NULL, tx_hash TEXT NOT NULL, block_number INTEGER, direction TEXT NOT NULL, counterparty TEXT, value_raw TEXT, value_display TEXT, token_contract TEXT, token_symbol TEXT, method TEXT, raw_json TEXT NOT NULL, risk_tier TEXT NOT NULL, created_at TEXT NOT NULL)''')
 
 
 def _rows(query: str, args: tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
@@ -113,6 +136,42 @@ def _row(query: str, args: tuple[Any, ...] = ()) -> Optional[Dict[str, Any]]:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def payload_hash(payload: Dict[str, Any]) -> str:
+    return 'sha256:' + hashlib.sha256(_json(payload).encode('utf-8')).hexdigest()
+
+
+def decimal_display(raw: int, decimals: int) -> str:
+    value = Decimal(raw) / (Decimal(10) ** Decimal(decimals))
+    return format(value.normalize(), 'f')
+
+
+def rpc_call(rpc_url: str, method: str, params: list[Any]) -> Any:
+    if not rpc_url:
+        raise RuntimeError('RPC URL is not configured for this chain')
+    body = {'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params}
+    response = requests.post(rpc_url, json=body, timeout=25)
+    response.raise_for_status()
+    data = response.json()
+    if data.get('error'):
+        raise RuntimeError(data['error'])
+    return data.get('result')
+
+
+def padded_evm_address(address: str) -> str:
+    a = address.lower().replace('0x', '')
+    if len(a) != 40:
+        raise ValueError('invalid EVM address')
+    return '0' * 24 + a
+
+
+def topic_to_evm_address(topic: str) -> str:
+    return '0x' + topic[-40:]
+
+
+def get_chain(chain: str) -> Optional[Dict[str, Any]]:
+    return _row('SELECT * FROM asset_os_chains WHERE chain=?', (chain,))
 
 
 def evaluate_risk(req: TxDraftCreate, policy: Optional[Dict[str, Any]] = None) -> tuple[str, List[str]]:
@@ -156,8 +215,9 @@ def evaluate_risk(req: TxDraftCreate, policy: Optional[Dict[str, Any]] = None) -
     return risk, reasons
 
 
-def payload_hash(payload: Dict[str, Any]) -> str:
-    return 'sha256:' + hashlib.sha256(_json(payload).encode('utf-8')).hexdigest()
+def create_alert(alert_type: str, severity: str, message: str, entity_type: str, entity_id: str) -> None:
+    with db.connect() as conn:
+        conn.execute('INSERT INTO asset_os_alerts (alert_type, severity, message, entity_type, entity_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', (alert_type, severity, message, entity_type, entity_id, 'open', db.utcnow()))
 
 
 @router.get('/status')
@@ -165,12 +225,12 @@ def asset_os_status() -> Dict[str, Any]:
     ensure_tables()
     return {
         'status': 'ok',
-        'version': '10.0-assetops-os',
+        'version': '10.1-token-watchtower',
         'custody_model': 'non-custodial',
         'private_key_storage': 'disabled',
         'signing': 'external-wallet-or-hsm-required',
         'broadcasting': 'approval-required-external-executor',
-        'modules': ['chains', 'wallets', 'policies', 'tx_drafts', 'approvals', 'evidence', 'alerts', 'audit'],
+        'modules': ['chains', 'wallets', 'token_monitors', 'tx_events', 'policies', 'tx_drafts', 'approvals', 'evidence', 'alerts', 'audit'],
     }
 
 
@@ -181,6 +241,8 @@ def dashboard() -> Dict[str, Any]:
         counts = {
             'chains': conn.execute('SELECT COUNT(*) c FROM asset_os_chains').fetchone()['c'],
             'wallets': conn.execute('SELECT COUNT(*) c FROM asset_os_wallets').fetchone()['c'],
+            'token_monitors': conn.execute('SELECT COUNT(*) c FROM asset_os_token_monitors').fetchone()['c'],
+            'tx_events': conn.execute('SELECT COUNT(*) c FROM asset_os_tx_events').fetchone()['c'],
             'policies': conn.execute('SELECT COUNT(*) c FROM asset_os_policies').fetchone()['c'],
             'tx_drafts': conn.execute('SELECT COUNT(*) c FROM asset_os_tx_drafts').fetchone()['c'],
             'open_alerts': conn.execute("SELECT COUNT(*) c FROM asset_os_alerts WHERE status='open'").fetchone()['c'],
@@ -193,7 +255,7 @@ def create_chain(req: ChainCreate) -> Dict[str, Any]:
     ensure_tables()
     now = db.utcnow()
     with db.connect() as conn:
-        cur = conn.execute('INSERT OR REPLACE INTO asset_os_chains (id, chain, chain_type, rpc_url, explorer_url, enabled, created_at, updated_at) VALUES ((SELECT id FROM asset_os_chains WHERE chain=?), ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM asset_os_chains WHERE chain=?), ?), ?)', (req.chain, req.chain, req.chain_type, req.rpc_url, req.explorer_url, int(req.enabled), req.chain, now, now))
+        conn.execute('INSERT OR REPLACE INTO asset_os_chains (id, chain, chain_type, rpc_url, explorer_url, enabled, created_at, updated_at) VALUES ((SELECT id FROM asset_os_chains WHERE chain=?), ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM asset_os_chains WHERE chain=?), ?), ?)', (req.chain, req.chain, req.chain_type, req.rpc_url, req.explorer_url, int(req.enabled), req.chain, now, now))
     db.audit('asset_os_create_chain', 'asset_os_chain', req.chain, req.model_dump(), 'success', 'low', 'not_required')
     return {'status': 'success', 'chain': req.chain}
 
@@ -217,6 +279,168 @@ def create_wallet(req: WalletCreate) -> Dict[str, Any]:
 @router.get('/wallets')
 def list_wallets() -> List[Dict[str, Any]]:
     return _rows('SELECT * FROM asset_os_wallets ORDER BY id DESC')
+
+
+@router.post('/token-monitors', dependencies=[Depends(require_asset_key)])
+def create_token_monitor(req: TokenMonitorCreate) -> Dict[str, Any]:
+    wallet = _row('SELECT * FROM asset_os_wallets WHERE id=?', (req.wallet_id,))
+    if not wallet:
+        raise HTTPException(status_code=404, detail='wallet not found')
+    now = db.utcnow()
+    with db.connect() as conn:
+        cur = conn.execute('INSERT INTO asset_os_token_monitors (wallet_id, token_standard, token_contract, token_symbol, decimals, poll_minutes, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', (req.wallet_id, req.token_standard.lower(), req.token_contract, req.token_symbol, req.decimals, req.poll_minutes, int(req.enabled), now, now))
+        monitor_id = int(cur.lastrowid)
+    db.audit('asset_os_create_token_monitor', 'asset_os_token_monitor', str(monitor_id), req.model_dump(), 'success', 'medium', 'not_required')
+    return refresh_token_monitor(monitor_id)
+
+
+@router.get('/token-monitors')
+def list_token_monitors() -> List[Dict[str, Any]]:
+    return _rows('SELECT tm.*, w.label wallet_label, w.chain, w.address wallet_address FROM asset_os_token_monitors tm JOIN asset_os_wallets w ON tm.wallet_id=w.id ORDER BY tm.id DESC')
+
+
+def refresh_token_monitor(monitor_id: int) -> Dict[str, Any]:
+    monitor = _row('SELECT tm.*, w.chain, w.address wallet_address FROM asset_os_token_monitors tm JOIN asset_os_wallets w ON tm.wallet_id=w.id WHERE tm.id=?', (monitor_id,))
+    if not monitor:
+        raise HTTPException(status_code=404, detail='token monitor not found')
+    previous = monitor.get('last_balance_raw')
+    try:
+        standard = monitor['token_standard'].lower()
+        raw_int = 0
+        if standard == 'erc20':
+            chain = get_chain(monitor['chain'])
+            contract = monitor.get('token_contract')
+            if not chain or not chain.get('rpc_url'):
+                raise RuntimeError('EVM chain RPC is not configured')
+            if not contract:
+                raise RuntimeError('ERC20 token_contract is required')
+            data = BALANCE_OF_SELECTOR + padded_evm_address(monitor['wallet_address'])
+            result = rpc_call(chain['rpc_url'], 'eth_call', [{'to': contract, 'data': data}, 'latest'])
+            raw_int = int(result or '0x0', 16)
+        elif standard == 'evm-native':
+            chain = get_chain(monitor['chain'])
+            if not chain or not chain.get('rpc_url'):
+                raise RuntimeError('EVM chain RPC is not configured')
+            result = rpc_call(chain['rpc_url'], 'eth_getBalance', [monitor['wallet_address'], 'latest'])
+            raw_int = int(result or '0x0', 16)
+        elif standard == 'trc20':
+            url = f'https://api.trongrid.io/v1/accounts/{monitor["wallet_address"]}'
+            data = requests.get(url, timeout=25).json()
+            raw_int = 0
+            for account in data.get('data', []):
+                for item in account.get('trc20', []):
+                    if monitor.get('token_contract'):
+                        if monitor['token_contract'] in item:
+                            raw_int = int(item.get(monitor['token_contract']) or 0)
+                    elif monitor['token_symbol'].upper() == 'USDT':
+                        for _, value in item.items():
+                            raw_int = int(value or 0)
+                            break
+        elif standard == 'trx-native':
+            url = f'https://api.trongrid.io/v1/accounts/{monitor["wallet_address"]}'
+            data = requests.get(url, timeout=25).json()
+            raw_int = int((data.get('data') or [{}])[0].get('balance') or 0)
+        else:
+            raise RuntimeError(f'unsupported token_standard={standard}')
+        raw = str(raw_int)
+        display = decimal_display(raw_int, int(monitor['decimals']))
+        changed = previous is not None and previous != raw
+        now = db.utcnow()
+        with db.connect() as conn:
+            conn.execute('UPDATE asset_os_token_monitors SET last_checked_at=?, last_balance_raw=?, last_balance=?, last_status=?, last_error=?, updated_at=? WHERE id=?', (now, raw, display, 'success', None, now, monitor_id))
+        if changed:
+            create_alert('token_balance_changed', 'medium', f'{monitor["token_symbol"]} balance changed for wallet {monitor["wallet_address"]}: {previous} -> {raw}', 'asset_os_token_monitor', str(monitor_id))
+        return _row('SELECT tm.*, w.label wallet_label, w.chain, w.address wallet_address FROM asset_os_token_monitors tm JOIN asset_os_wallets w ON tm.wallet_id=w.id WHERE tm.id=?', (monitor_id,)) or {'id': monitor_id}
+    except Exception as exc:
+        now = db.utcnow()
+        with db.connect() as conn:
+            conn.execute('UPDATE asset_os_token_monitors SET last_checked_at=?, last_status=?, last_error=?, updated_at=? WHERE id=?', (now, 'error', str(exc), now, monitor_id))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post('/token-monitors/{monitor_id}/refresh', dependencies=[Depends(require_asset_key)])
+def refresh_token_monitor_endpoint(monitor_id: int) -> Dict[str, Any]:
+    return refresh_token_monitor(monitor_id)
+
+
+@router.post('/token-monitors/refresh-all', dependencies=[Depends(require_asset_key)])
+def refresh_all_token_monitors() -> Dict[str, Any]:
+    monitors = _rows('SELECT id FROM asset_os_token_monitors WHERE enabled=1 ORDER BY id')
+    results = []
+    for monitor in monitors:
+        try:
+            results.append(refresh_token_monitor(int(monitor['id'])))
+        except HTTPException as exc:
+            results.append({'id': monitor['id'], 'status': 'error', 'detail': exc.detail})
+    return {'status': 'done', 'count': len(results), 'results': results}
+
+
+@router.post('/tx-events/sync', dependencies=[Depends(require_asset_key)])
+def sync_tx_events(req: TxEventSyncRequest) -> Dict[str, Any]:
+    wallet = _row('SELECT * FROM asset_os_wallets WHERE id=?', (req.wallet_id,))
+    if not wallet:
+        raise HTTPException(status_code=404, detail='wallet not found')
+    chain_row = get_chain(wallet['chain'])
+    chain_type = (chain_row or {}).get('chain_type', wallet['chain']).lower()
+    inserted = 0
+    if chain_type == 'tron' or wallet['chain'].lower() == 'tron':
+        url = f'https://api.trongrid.io/v1/accounts/{wallet["address"]}/transactions/trc20?limit={req.limit}&only_confirmed=true'
+        data = requests.get(url, timeout=25).json()
+        for item in data.get('data', []):
+            tx_hash = item.get('transaction_id') or item.get('txID') or ''
+            if not tx_hash:
+                continue
+            exists = _row('SELECT id FROM asset_os_tx_events WHERE tx_hash=? AND wallet_id=?', (tx_hash, req.wallet_id))
+            if exists:
+                continue
+            from_addr = item.get('from') or ''
+            to_addr = item.get('to') or ''
+            direction = 'in' if to_addr == wallet['address'] else 'out' if from_addr == wallet['address'] else 'related'
+            token = item.get('token_info') or {}
+            decimals = int(token.get('decimals') or 6)
+            raw_value = str(item.get('value') or '0')
+            display = decimal_display(int(raw_value), decimals)
+            with db.connect() as conn:
+                conn.execute('INSERT INTO asset_os_tx_events (wallet_id, chain, wallet_address, tx_hash, block_number, direction, counterparty, value_raw, value_display, token_contract, token_symbol, method, raw_json, risk_tier, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (req.wallet_id, wallet['chain'], wallet['address'], tx_hash, item.get('block') or item.get('block_number'), direction, to_addr if direction == 'out' else from_addr, raw_value, display, token.get('address'), token.get('symbol') or 'TRC20', 'trc20_transfer', _json(item), 'medium', db.utcnow()))
+            inserted += 1
+    else:
+        if not chain_row or not chain_row.get('rpc_url'):
+            raise HTTPException(status_code=400, detail='EVM RPC is required for event sync')
+        monitors = _rows('SELECT * FROM asset_os_token_monitors WHERE wallet_id=? AND token_standard="erc20" AND enabled=1', (req.wallet_id,))
+        if req.token_monitor_id:
+            monitors = [m for m in monitors if int(m['id']) == req.token_monitor_id]
+        latest_hex = rpc_call(chain_row['rpc_url'], 'eth_blockNumber', [])
+        latest = int(latest_hex, 16)
+        from_block = max(0, latest - req.lookback_blocks)
+        wallet_topic = '0x' + padded_evm_address(wallet['address'])
+        for monitor in monitors:
+            for direction, topic_index in [('in', 2), ('out', 1)]:
+                topics = [TRANSFER_TOPIC, None, None]
+                topics[topic_index] = wallet_topic
+                logs = rpc_call(chain_row['rpc_url'], 'eth_getLogs', [{'fromBlock': hex(from_block), 'toBlock': 'latest', 'address': monitor['token_contract'], 'topics': topics}]) or []
+                for log in logs[: req.limit]:
+                    tx_hash = log.get('transactionHash') or ''
+                    if not tx_hash:
+                        continue
+                    exists = _row('SELECT id FROM asset_os_tx_events WHERE tx_hash=? AND wallet_id=? AND token_contract=? AND direction=?', (tx_hash, req.wallet_id, monitor['token_contract'], direction))
+                    if exists:
+                        continue
+                    from_addr = topic_to_evm_address(log['topics'][1]) if len(log.get('topics', [])) > 1 else ''
+                    to_addr = topic_to_evm_address(log['topics'][2]) if len(log.get('topics', [])) > 2 else ''
+                    raw_value = str(int(log.get('data') or '0x0', 16))
+                    display = decimal_display(int(raw_value), int(monitor['decimals']))
+                    with db.connect() as conn:
+                        conn.execute('INSERT INTO asset_os_tx_events (wallet_id, chain, wallet_address, tx_hash, block_number, direction, counterparty, value_raw, value_display, token_contract, token_symbol, method, raw_json, risk_tier, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (req.wallet_id, wallet['chain'], wallet['address'], tx_hash, int(log.get('blockNumber') or '0x0', 16), direction, to_addr if direction == 'out' else from_addr, raw_value, display, monitor['token_contract'], monitor['token_symbol'], 'erc20_transfer', _json(log), 'medium', db.utcnow()))
+                    inserted += 1
+    if inserted:
+        create_alert('tx_events_detected', 'medium', f'{inserted} new transaction event(s) parsed for wallet {wallet["address"]}', 'asset_os_wallet', str(req.wallet_id))
+    db.audit('asset_os_sync_tx_events', 'asset_os_wallet', str(req.wallet_id), req.model_dump(), f'inserted={inserted}', 'medium', 'not_required')
+    return {'status': 'success', 'inserted': inserted}
+
+
+@router.get('/tx-events')
+def list_tx_events(limit: int = 100) -> List[Dict[str, Any]]:
+    return _rows('SELECT * FROM asset_os_tx_events ORDER BY id DESC LIMIT ?', (limit,))
 
 
 @router.post('/policies', dependencies=[Depends(require_asset_key)])
