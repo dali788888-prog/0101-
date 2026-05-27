@@ -90,3 +90,87 @@ class WalletRefreshResult(BaseModel):
     balance_wei: Optional[str] = None
     balance_native: Optional[str] = None
     error: Optional[str] = None
+
+
+class SafeRegistryCreate(BaseModel):
+    name: str = Field(..., min_length=2)
+    chain: str = Field(default='ethereum', min_length=2)
+    safe_address: str = Field(..., min_length=6)
+    owners: List[str] = Field(default=[])
+    threshold: int = Field(default=2, ge=1)
+    daily_limit_native: str = '0'
+    single_tx_limit_native: str = '0'
+    enabled: bool = True
+
+
+class SafeRegistryOut(BaseModel):
+    id: int
+    name: str
+    chain: str
+    safe_address: str
+    owners_json: str
+    threshold: int
+    daily_limit_native: str
+    single_tx_limit_native: str
+    enabled: bool
+    created_at: str
+    updated_at: str
+
+
+class AssetPolicyCreate(BaseModel):
+    safe_id: int
+    name: str = Field(..., min_length=2)
+    allowed_to_addresses: List[str] = Field(default=[])
+    denied_to_addresses: List[str] = Field(default=[])
+    max_single_native: str = '0'
+    max_daily_native: str = '0'
+    require_manual_approval: bool = True
+    enabled: bool = True
+
+
+class SafeTxDraftCreate(BaseModel):
+    safe_id: int
+    title: str = Field(..., min_length=2)
+    to_address: str = Field(..., min_length=6)
+    value_native: str = '0'
+    token_address: Optional[str] = None
+    calldata: str = '0x'
+    operation: str = 'call'
+    risk_note: str = ''
+
+
+class SafeTxDraftOut(BaseModel):
+    id: int
+    safe_id: int
+    title: str
+    to_address: str
+    value_native: str
+    token_address: Optional[str]
+    calldata: str
+    operation: str
+    risk_tier: str
+    approval_state: str
+    safe_tx_hash: Optional[str] = None
+    execution_tx_hash: Optional[str] = None
+    risk_note: str
+    created_at: str
+    updated_at: str
+
+
+class ApprovalRequest(BaseModel):
+    tx_id: int
+    operator: str = Field(default='local-operator', min_length=2)
+    decision: str = Field(..., pattern='^(approved|rejected)$')
+    note: str = ''
+
+
+class SafeSignRequest(BaseModel):
+    tx_id: int
+    signer_address: str = Field(..., min_length=6)
+    signature: str = Field(..., min_length=10)
+
+
+class SafeExecutionMark(BaseModel):
+    tx_id: int
+    execution_tx_hash: str = Field(..., min_length=10)
+    note: str = ''
