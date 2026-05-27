@@ -14,7 +14,8 @@ from app.config import get_settings
 from app.runtime import run_store
 from app.safe_ops import approve_tx, build_safe_tx_payload, create_tx_draft, mark_executed, record_signature, register_safe
 from app.scheduler import HermesScheduler
-from app.schemas import ApprovalRequest, AgentResult, MultisigPlanRequest, RunRequest, SafeExecutionMark, SafeRegistryCreate, SafeRegistryOut, SafeSignRequest, SafeTxDraftCreate, SafeTxDraftOut, TaskCreate, TaskOut, WalletMonitorCreate, WalletMonitorOut, WalletRefreshResult
+from app.schemas import ApprovalRequest, AgentResult, MultisigPlanRequest, RunRequest, SafeExecutionMark, SafeRegistryCreate, SafeRegistryOut, SafeSignRequest, SafeTxDraftCreate, SafeTxDraftOut, TaskCreate, TaskOut, TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark, WalletMonitorCreate, WalletMonitorOut, WalletRefreshResult
+from app.tron_ops import approve_tron_permission_draft, create_tron_permission_draft, get_tron_permission_payload, list_tron_permission_drafts, mark_tron_permission_executed
 from app.wallets import create_multisig_plan, refresh_all_wallet_monitors, refresh_wallet_monitor_by_id
 
 settings = get_settings()
@@ -39,7 +40,7 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 @app.get('/health')
 def health() -> dict:
-    return {'status': 'ok', 'app': settings.app_name, 'search_provider': settings.search_provider, 'model': settings.ollama_model, 'version': '2.0-asset-ops'}
+    return {'status': 'ok', 'app': settings.app_name, 'search_provider': settings.search_provider, 'model': settings.ollama_model, 'version': '2.1-tron-permissions'}
 
 
 @app.get('/', response_class=HTMLResponse)
@@ -210,6 +211,43 @@ def add_safe_signature(req: SafeSignRequest) -> dict:
 def mark_safe_tx_executed(req: SafeExecutionMark) -> dict:
     try:
         return mark_executed(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post('/tron/permissions', response_model=TronPermissionDraftOut, dependencies=[Depends(require_key)])
+def create_tron_permission(req: TronPermissionDraftCreate) -> TronPermissionDraftOut:
+    try:
+        return create_tron_permission_draft(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get('/tron/permissions', response_model=List[TronPermissionDraftOut])
+def tron_permissions() -> List[TronPermissionDraftOut]:
+    return list_tron_permission_drafts()
+
+
+@app.get('/tron/permissions/{draft_id}/payload')
+def tron_permission_payload(draft_id: int) -> dict:
+    try:
+        return get_tron_permission_payload(draft_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post('/tron/permissions/{draft_id}/approve', dependencies=[Depends(require_key)])
+def approve_tron_permission(draft_id: int, decision: str = 'approved', operator: str = 'local-operator', note: str = '') -> dict:
+    try:
+        return approve_tron_permission_draft(draft_id, decision, operator, note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post('/tron/permissions/mark-executed', dependencies=[Depends(require_key)])
+def mark_tron_permission_execution(req: TronPermissionExecutionMark) -> dict:
+    try:
+        return mark_tron_permission_executed(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
