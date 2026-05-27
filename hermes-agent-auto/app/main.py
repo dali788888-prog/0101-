@@ -53,7 +53,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '10.15-rwa-scaffold-home-integrated',
+        'version': '10.16-rwa-scaffold-embedded',
     }
 
 
