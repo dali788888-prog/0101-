@@ -15,6 +15,7 @@ from app.quant_ext import router as quant_ext_router
 from app.quant_market import router as quant_market_router
 from app.quant_live_predict import router as quant_live_predict_router
 from app.quant_emergency import router as quant_emergency_router
+from app.rwa_mine import router as rwa_mine_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -40,6 +41,7 @@ app.include_router(quant_ext_router)
 app.include_router(quant_market_router)
 app.include_router(quant_live_predict_router)
 app.include_router(quant_emergency_router)
+app.include_router(rwa_mine_router)
 
 
 @app.get('/health')
@@ -49,7 +51,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '10.10-live-ui-emergency-risk',
+        'version': '10.11-rwa-mine-mvp-command',
     }
 
 
@@ -86,6 +88,11 @@ def quant_ui() -> str:
 @app.get('/quant-risk-ui', response_class=HTMLResponse)
 def quant_risk_ui() -> str:
     return html_file('quant_risk_ui.html', '<h1>Quant Risk UI file not found.</h1>')
+
+
+@app.get('/rwa-mine-ui', response_class=HTMLResponse)
+def rwa_mine_ui() -> str:
+    return html_file('rwa_mine_ui.html', '<h1>RWA Mine UI file not found.</h1>')
 
 
 @app.post('/tron/permissions', response_model=TronPermissionDraftOut)
