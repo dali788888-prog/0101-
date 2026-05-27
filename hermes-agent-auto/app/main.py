@@ -51,6 +51,14 @@ def index() -> str:
     return '<h1>Hermes Agent Auto Executor</h1><p>UI file not found.</p>'
 
 
+@app.get('/tron-ui', response_class=HTMLResponse)
+def tron_ui() -> str:
+    ui_path = Path(__file__).with_name('tron_ui.html')
+    if ui_path.exists():
+        return ui_path.read_text(encoding='utf-8')
+    return '<h1>TRON UI file not found.</h1>'
+
+
 def _run_with_events(run_id: str, title: str, prompt: str, max_results: int, notify: bool, task_id: Optional[int] = None) -> None:
     def progress(event_type: str, message: str, progress_value: int, data: dict) -> None:
         run_store.emit(run_id, event_type, message, progress=progress_value, data=data)
