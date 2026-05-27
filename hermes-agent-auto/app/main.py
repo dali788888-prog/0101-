@@ -53,7 +53,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '10.13-rwa-scaffold-generator',
+        'version': '10.14-rwa-scaffold-ui',
     }
 
 
@@ -95,6 +95,11 @@ def quant_risk_ui() -> str:
 @app.get('/rwa-mine-ui', response_class=HTMLResponse)
 def rwa_mine_ui() -> str:
     return html_file('rwa_mine_ui.html', '<h1>RWA Mine UI file not found.</h1>')
+
+
+@app.get('/rwa-scaffold-ui', response_class=HTMLResponse)
+def rwa_scaffold_ui() -> str:
+    return html_file('rwa_scaffold_ui.html', '<h1>RWA Scaffold UI file not found.</h1>')
 
 
 @app.post('/tron/permissions', response_model=TronPermissionDraftOut)
