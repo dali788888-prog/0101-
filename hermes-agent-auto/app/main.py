@@ -61,7 +61,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '15.1-commercial-os-home-integrated',
+        'version': '15.2-commercial-os-single-ui-fusion',
     }
 
 
