@@ -24,6 +24,7 @@ from app.commercial_os import router as commercial_os_router
 from app.operator_chat import router as operator_chat_router
 from app.agent_runs import router as agent_runs_router
 from app.exchange_market import router as exchange_market_router
+from app.strategy_signals import router as strategy_signals_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -58,6 +59,7 @@ app.include_router(commercial_os_router)
 app.include_router(operator_chat_router)
 app.include_router(agent_runs_router)
 app.include_router(exchange_market_router)
+app.include_router(strategy_signals_router)
 
 
 @app.get('/health')
@@ -67,7 +69,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '15.9-multi-exchange-market-matrix',
+        'version': '16.0-strategy-research-signal-center',
     }
 
 
@@ -129,6 +131,11 @@ def market_ws_ui() -> str:
 @app.get('/market-matrix-ui', response_class=HTMLResponse)
 def market_matrix_ui() -> str:
     return html_file('market_matrix_ui.html', '<h1>Market Matrix UI file not found.</h1>')
+
+
+@app.get('/strategy-signals-ui', response_class=HTMLResponse)
+def strategy_signals_ui() -> str:
+    return html_file('strategy_signals_ui.html', '<h1>Strategy Signals UI file not found.</h1>')
 
 
 @app.post('/tron/permissions', response_model=TronPermissionDraftOut)
