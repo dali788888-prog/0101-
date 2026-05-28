@@ -61,6 +61,18 @@ class ReadinessTicketCreate(BaseModel):
     note: str = ''
 
 
+class SignalTicketCreate(BaseModel):
+    account_id: int
+    signal_id: str = Field(min_length=8, max_length=160)
+    amount: str = '0.0001'
+    order_type: str = Field(default='market', pattern='^(market|limit)$')
+    price: str = ''
+    max_quote_value: str = '20'
+    side_override: str = Field(default='', pattern='^(|buy|sell)$')
+    operator: str = 'local-operator'
+    note: str = ''
+
+
 class ReadinessDecision(BaseModel):
     decision: str = Field(pattern='^(approved|rejected)$')
     operator: str = 'local-operator'
@@ -136,7 +148,7 @@ def quote_estimate(req: ReadinessTicketCreate) -> Decimal:
 
 
 def readiness_checks(account: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    checks = [
+    return [
         {'key': 'sub_account', 'title': '使用交易所子账户', 'required': True, 'status': 'manual_check'},
         {'key': 'withdraw_disabled', 'title': 'API 禁止提现权限', 'required': True, 'status': 'pass' if account and account.get('withdraw_permission') == 'disabled' else 'manual_check'},
         {'key': 'ip_allowlist', 'title': 'API 固定 IP 白名单', 'required': True, 'status': 'pass' if account and account.get('ip_allowlist') == 'configured' else 'manual_check'},
@@ -144,19 +156,65 @@ def readiness_checks(account: Optional[Dict[str, Any]] = None) -> List[Dict[str,
         {'key': 'manual_approval', 'title': '每笔需要人工审批', 'required': True, 'status': 'enforced'},
         {'key': 'kill_switch', 'title': '紧急停止开关', 'required': True, 'status': 'on' if kill_switch_on() else 'off'},
         {'key': 'no_auto_submit', 'title': '系统不自动提交交易所订单', 'required': True, 'status': 'enforced'},
+        {'key': 'signal_to_ticket_only', 'title': '策略信号只能生成票据草稿', 'required': True, 'status': 'enforced'},
     ]
-    return checks
+
+
+def read_signal(signal_id: str) -> Dict[str, Any]:
+    try:
+        with db.connect() as conn:
+            row_obj = conn.execute('SELECT * FROM strategy_signal_events WHERE signal_id=?', (signal_id,)).fetchone()
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail='strategy signal table not found; run signal analysis first') from exc
+    if not row_obj:
+        raise HTTPException(status_code=404, detail='strategy signal not found')
+    item = dict(row_obj)
+    item['payload'] = json.loads(item.pop('payload_json') or '{}')
+    return item
+
+
+def list_open_signals(limit: int = 50) -> List[Dict[str, Any]]:
+    try:
+        with db.connect() as conn:
+            data = [dict(r) for r in conn.execute("SELECT * FROM strategy_signal_events WHERE status IN ('open','acknowledged') ORDER BY score DESC, id DESC LIMIT ?", (limit,)).fetchall()]
+    except Exception:
+        return []
+    for x in data:
+        x['payload'] = json.loads(x.pop('payload_json') or '{}')
+    return data
+
+
+def normalize_symbol_for_ticket(symbol: str) -> str:
+    s = (symbol or '').replace('-', '').replace('_', '').replace('/', '').upper()
+    if s.endswith('USDT'):
+        return s[:-4] + '/USDT'
+    if s.endswith('USDC'):
+        return s[:-4] + '/USDC'
+    return symbol
+
+
+def infer_side(signal: Dict[str, Any], override: str = '') -> str:
+    if override:
+        return override
+    st = str(signal.get('signal_type') or '').upper()
+    summary = str((signal.get('payload') or {}).get('summary') or '').lower()
+    if 'SHORT' in st or '下行' in summary:
+        return 'sell'
+    if 'LONG' in st or '上行' in summary:
+        return 'buy'
+    return 'buy'
 
 
 @router.get('/status')
 def status() -> Dict[str, Any]:
     return {
         'status': 'ok',
-        'version': '16.4-trade-readiness-gate',
+        'version': '16.7-signal-to-trade-readiness-ticket',
         'kill_switch': 'on' if kill_switch_on() else 'off',
         'hard_limit_usdt_first_stage': '20',
         'readiness_checks': readiness_checks(),
         'scope': 'approval tickets and manual handoff only',
+        'signal_linking': 'strategy signals can create ticket drafts only; no auto approval and no exchange submission',
         'not_supported': ['autonomous order submission', 'custody of secrets', 'withdrawals', 'bypass approvals'],
     }
 
@@ -207,6 +265,38 @@ def list_tickets(limit: int = 100) -> List[Dict[str, Any]]:
     return rows('SELECT * FROM trade_ready_tickets ORDER BY id DESC LIMIT ?', (limit,))
 
 
+@router.get('/signals/open')
+def open_signals(limit: int = 50) -> Dict[str, Any]:
+    return {'status': 'ok', 'signals': list_open_signals(limit=limit), 'safety': 'signals are research only; conversion creates draft tickets only'}
+
+
+@router.post('/signals/create-ticket', dependencies=[Depends(require_key)])
+def create_ticket_from_signal(req: SignalTicketCreate) -> Dict[str, Any]:
+    signal = read_signal(req.signal_id)
+    if signal.get('status') not in {'open', 'acknowledged'}:
+        raise HTTPException(status_code=400, detail='only open or acknowledged signals can be converted into readiness ticket drafts')
+    payload = signal.get('payload') or {}
+    symbol = normalize_symbol_for_ticket(signal.get('symbol') or payload.get('symbol') or 'BTCUSDT')
+    side = infer_side(signal, req.side_override)
+    note = '; '.join([
+        f'source_signal_id={req.signal_id}',
+        f'signal_type={signal.get("signal_type")}',
+        f'signal_severity={signal.get("severity")}',
+        f'signal_score={signal.get("score")}',
+        payload.get('summary', ''),
+        payload.get('risk_note', ''),
+        req.note,
+    ])
+    draft_req = ReadinessTicketCreate(account_id=req.account_id, symbol=symbol, side=side, order_type=req.order_type, amount=req.amount, price=req.price, max_quote_value=req.max_quote_value, note=note)
+    ticket = create_ticket(draft_req)
+    with db.connect() as conn:
+        response = {'source_signal': signal, 'created_from_signal_at': now(), 'operator': req.operator}
+        conn.execute('UPDATE trade_ready_tickets SET response_json=?, updated_at=? WHERE id=?', (jd(response), now(), ticket['id']))
+    db.audit('trade_ready_signal_to_ticket', 'trade_ready_ticket', str(ticket['id']), {'signal_id': req.signal_id, 'account_id': req.account_id, 'side': side, 'symbol': symbol}, 'success', 'critical', 'pending')
+    updated = row('SELECT * FROM trade_ready_tickets WHERE id=?', (ticket['id'],)) or ticket
+    return {'status': 'success', 'ticket': updated, 'source_signal': signal, 'safety': 'draft only; requires approval and manual handoff; no exchange order was submitted'}
+
+
 @router.post('/tickets/{ticket_id}/decision', dependencies=[Depends(require_key)])
 def decide_ticket(ticket_id: int, req: ReadinessDecision) -> Dict[str, Any]:
     ticket = row('SELECT * FROM trade_ready_tickets WHERE id=?', (ticket_id,))
@@ -231,21 +321,7 @@ def issue_manual_ticket(ticket_id: int, req: ReadinessTicketIssue) -> Dict[str, 
     if req.confirm_phrase != phrase:
         raise HTTPException(status_code=400, detail=f'exact confirmation phrase required: {phrase}')
     account = row('SELECT * FROM trade_ready_accounts WHERE id=?', (ticket['account_id'],)) or {}
-    manual_ticket = {
-        'ticket_id': ticket_id,
-        'exchange': account.get('exchange'),
-        'market_type': account.get('market_type'),
-        'symbol': ticket['symbol'],
-        'side': ticket['side'],
-        'order_type': ticket['order_type'],
-        'amount': ticket['amount'],
-        'price': ticket['price'],
-        'max_quote_value': ticket['max_quote_value'],
-        'risk_note': ticket['risk_note'],
-        'operator': req.operator,
-        'created_at_utc': now(),
-        'after_manual_action': 'Record external reference with /mark-external-done.',
-    }
+    manual_ticket = {'ticket_id': ticket_id, 'exchange': account.get('exchange'), 'market_type': account.get('market_type'), 'symbol': ticket['symbol'], 'side': ticket['side'], 'order_type': ticket['order_type'], 'amount': ticket['amount'], 'price': ticket['price'], 'max_quote_value': ticket['max_quote_value'], 'risk_note': ticket['risk_note'], 'operator': req.operator, 'created_at_utc': now(), 'after_manual_action': 'Record external reference with /mark-external-done.'}
     with db.connect() as conn:
         conn.execute('UPDATE trade_ready_tickets SET ticket_state=?, response_json=?, updated_at=? WHERE id=?', ('manual_ticket_issued', jd(manual_ticket), now(), ticket_id))
     db.audit('trade_ready_manual_ticket_issued', 'trade_ready_ticket', str(ticket_id), {'operator': req.operator}, 'success', 'critical', 'approved')
