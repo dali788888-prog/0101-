@@ -33,6 +33,7 @@ from app.release_gate import router as release_gate_router
 from app.ops_automation import router as ops_automation_router
 from app.ops_workflow import router as ops_workflow_router
 from app.diagnostics_center import router as diagnostics_center_router
+from app.system_map import router as system_map_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -76,6 +77,7 @@ app.include_router(release_gate_router)
 app.include_router(ops_automation_router)
 app.include_router(ops_workflow_router)
 app.include_router(diagnostics_center_router)
+app.include_router(system_map_router)
 
 
 @app.get('/health')
@@ -85,7 +87,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '19.3-diagnostics-search-health-repair',
+        'version': '19.6-system-map-config-visualization',
     }
 
 
@@ -107,6 +109,11 @@ def legacy_ui() -> str:
 @app.get('/diagnostics-ui', response_class=HTMLResponse)
 def diagnostics_ui() -> str:
     return html_file('diagnostics_ui.html', '<h1>Diagnostics UI file not found.</h1>')
+
+
+@app.get('/system-map-ui', response_class=HTMLResponse)
+def system_map_ui() -> str:
+    return html_file('system_map_ui.html', '<h1>System Map UI file not found.</h1>')
 
 
 @app.get('/ops-automation-ui', response_class=HTMLResponse)
