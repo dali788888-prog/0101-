@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import requests
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -21,6 +21,15 @@ def require_key(x_hermes_api_key: str = Header(default='')) -> None:
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def fnum(value: Any) -> Optional[float]:
+    try:
+        if value is None or value == '':
+            return None
+        return float(value)
+    except Exception:
+        return None
 
 
 class PriceRequest(BaseModel):
@@ -45,6 +54,13 @@ class TradesRequest(BaseModel):
     provider: str = 'binance'
     symbol: str = 'BTCUSDT'
     limit: int = Field(default=30, ge=5, le=100)
+
+
+class MatrixRequest(BaseModel):
+    providers: List[str] = Field(default_factory=lambda: ['binance', 'okx', 'bybit', 'gate'])
+    symbols: List[str] = Field(default_factory=lambda: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'])
+    include_depth: bool = True
+    depth_limit: int = Field(default=5, ge=5, le=20)
 
 
 def normalize(provider: str, symbol: str) -> str:
@@ -156,13 +172,69 @@ def get_trades(provider: str, symbol: str, limit: int) -> Dict[str, Any]:
     return {'provider': p, 'symbol': s, 'trades': trades[:limit], 'time_utc': now()}
 
 
+def build_matrix(req: MatrixRequest) -> Dict[str, Any]:
+    cells: List[Dict[str, Any]] = []
+    opportunities: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+    by_symbol: Dict[str, List[Dict[str, Any]]] = {s: [] for s in req.symbols}
+
+    for symbol in req.symbols:
+        for provider in req.providers:
+            try:
+                price = get_price(provider, symbol)
+                depth = get_depth(provider, symbol, req.depth_limit) if req.include_depth else {'bids': [], 'asks': []}
+                bid = fnum((depth.get('bids') or [[None]])[0][0])
+                ask = fnum((depth.get('asks') or [[None]])[0][0])
+                last = fnum(price.get('price'))
+                spread_pct = ((ask - bid) / last * 100) if bid and ask and last else None
+                cell = {
+                    'provider': provider,
+                    'symbol': symbol,
+                    'venue_symbol': price.get('symbol'),
+                    'last': last,
+                    'change_pct': fnum(price.get('change_pct')),
+                    'volume': fnum(price.get('volume')),
+                    'best_bid': bid,
+                    'best_ask': ask,
+                    'local_spread_pct': round(spread_pct, 6) if spread_pct is not None else None,
+                    'time_utc': price.get('time_utc'),
+                }
+                cells.append(cell)
+                by_symbol[symbol].append(cell)
+            except Exception as exc:
+                errors.append({'provider': provider, 'symbol': symbol, 'error': str(exc)})
+
+    for symbol, items in by_symbol.items():
+        priced = [x for x in items if x.get('last') is not None]
+        if len(priced) < 2:
+            continue
+        low = min(priced, key=lambda x: x['last'])
+        high = max(priced, key=lambda x: x['last'])
+        mid = (low['last'] + high['last']) / 2 if low['last'] and high['last'] else None
+        gap = high['last'] - low['last']
+        gap_pct = (gap / mid * 100) if mid else None
+        opportunities.append({
+            'symbol': symbol,
+            'buy_reference': low['provider'],
+            'sell_reference': high['provider'],
+            'low_price': low['last'],
+            'high_price': high['last'],
+            'gap': round(gap, 8),
+            'gap_pct': round(gap_pct, 6) if gap_pct is not None else None,
+            'note': 'Read-only cross-exchange spread watch. Fees, slippage, funding, transfer delay and account limits are not included.',
+        })
+
+    opportunities.sort(key=lambda x: x.get('gap_pct') or 0, reverse=True)
+    return {'status': 'success' if not errors else 'partial', 'cells': cells, 'opportunities': opportunities, 'errors': errors, 'time_utc': now()}
+
+
 @router.get('/providers')
 def providers() -> Dict[str, Any]:
     return {
         'status': 'ok',
         'providers': ['binance', 'okx', 'bybit', 'gate'],
         'symbols': ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'],
-        'channels': ['ticker', 'trades', 'depth', 'candles'],
+        'channels': ['ticker', 'trades', 'depth', 'candles', 'matrix'],
         'mode': 'rest_snapshot_plus_browser_websocket',
     }
 
@@ -207,5 +279,15 @@ def trades(req: TradesRequest) -> Dict[str, Any]:
         result = get_trades(req.provider, req.symbol, req.limit)
         db.audit('exchange_market_trades', 'exchange_market', f'{req.provider}:{req.symbol}', req.model_dump(), 'success', 'low', 'not_required')
         return {'status': 'success', **result}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post('/matrix', dependencies=[Depends(require_key)])
+def matrix(req: MatrixRequest) -> Dict[str, Any]:
+    try:
+        result = build_matrix(req)
+        db.audit('exchange_market_matrix', 'exchange_market', 'matrix', {'providers': req.providers, 'symbols': req.symbols, 'errors': len(result.get('errors') or [])}, result['status'], 'low', 'not_required')
+        return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
