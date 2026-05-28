@@ -71,7 +71,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '16.5-trade-readiness-ui-command-center',
+        'version': '16.6-unified-trade-readiness-command',
     }
 
 
@@ -82,7 +82,7 @@ def html_file(name: str, fallback: str) -> str:
 
 @app.get('/', response_class=HTMLResponse)
 def index() -> str:
-    return html_file('home_ui_v161.html', '<h1>Hermes v16.1 UI file not found.</h1>')
+    return html_file('home_ui_v166.html', '<h1>Hermes v16.6 UI file not found.</h1>')
 
 
 @app.get('/legacy-ui', response_class=HTMLResponse)
