@@ -32,6 +32,7 @@ from app.portfolio_risk import router as portfolio_risk_router
 from app.release_gate import router as release_gate_router
 from app.ops_automation import router as ops_automation_router
 from app.ops_workflow import router as ops_workflow_router
+from app.diagnostics_center import router as diagnostics_center_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -74,6 +75,7 @@ app.include_router(portfolio_risk_router)
 app.include_router(release_gate_router)
 app.include_router(ops_automation_router)
 app.include_router(ops_workflow_router)
+app.include_router(diagnostics_center_router)
 
 
 @app.get('/health')
@@ -83,7 +85,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '19.0-ops-command-workflow-center',
+        'version': '19.3-diagnostics-search-health-repair',
     }
 
 
@@ -100,6 +102,11 @@ def index() -> str:
 @app.get('/legacy-ui', response_class=HTMLResponse)
 def legacy_ui() -> str:
     return '<h1>Legacy UI disabled</h1><p>已取消旧版入口，请使用首页侧边栏。</p>'
+
+
+@app.get('/diagnostics-ui', response_class=HTMLResponse)
+def diagnostics_ui() -> str:
+    return html_file('diagnostics_ui.html', '<h1>Diagnostics UI file not found.</h1>')
 
 
 @app.get('/ops-automation-ui', response_class=HTMLResponse)
