@@ -27,6 +27,7 @@ from app.exchange_market import router as exchange_market_router
 from app.strategy_signals import router as strategy_signals_router
 from app.trade_readiness import router as trade_readiness_router
 from app.trade_lifecycle import router as trade_lifecycle_router
+from app.paper_trading import router as paper_trading_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -64,6 +65,7 @@ app.include_router(exchange_market_router)
 app.include_router(strategy_signals_router)
 app.include_router(trade_readiness_router)
 app.include_router(trade_lifecycle_router)
+app.include_router(paper_trading_router)
 
 
 @app.get('/health')
@@ -73,7 +75,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '17.0-trade-lifecycle-review-center',
+        'version': '17.3-paper-trading-feedback-loop',
     }
 
 
@@ -90,6 +92,11 @@ def index() -> str:
 @app.get('/legacy-ui', response_class=HTMLResponse)
 def legacy_ui() -> str:
     return '<h1>Legacy UI disabled</h1><p>已取消旧版入口，请使用首页侧边栏。</p>'
+
+
+@app.get('/paper-trading-ui', response_class=HTMLResponse)
+def paper_trading_ui() -> str:
+    return html_file('paper_trading_ui.html', '<h1>Paper Trading UI file not found.</h1>')
 
 
 @app.get('/asset-os-ui', response_class=HTMLResponse)
