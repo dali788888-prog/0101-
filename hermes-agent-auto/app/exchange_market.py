@@ -35,6 +35,18 @@ class CandleRequest(BaseModel):
     limit: int = Field(default=120, ge=10, le=500)
 
 
+class DepthRequest(BaseModel):
+    provider: str = 'binance'
+    symbol: str = 'BTCUSDT'
+    limit: int = Field(default=20, ge=5, le=100)
+
+
+class TradesRequest(BaseModel):
+    provider: str = 'binance'
+    symbol: str = 'BTCUSDT'
+    limit: int = Field(default=30, ge=5, le=100)
+
+
 def normalize(provider: str, symbol: str) -> str:
     s = symbol.replace('/', '').replace('-', '').replace('_', '').upper()
     if provider == 'okx':
@@ -86,19 +98,73 @@ def get_candles(provider: str, symbol: str, interval: str, limit: int) -> Dict[s
         raw = requests.get(f'https://api.binance.com/api/v3/klines?symbol={s}&interval={interval}&limit={limit}', timeout=20).json()
         candles = [{'t': int(x[0]), 'open': x[1], 'high': x[2], 'low': x[3], 'close': x[4], 'volume': x[5]} for x in raw]
     elif p == 'okx':
-        bar = {'1m':'1m','5m':'5m','15m':'15m','1h':'1H','4h':'4H','1d':'1D'}.get(interval, interval)
+        bar = {'1m': '1m', '5m': '5m', '15m': '15m', '1h': '1H', '4h': '4H', '1d': '1D'}.get(interval, interval)
         data = requests.get(f'https://www.okx.com/api/v5/market/candles?instId={s}&bar={bar}&limit={limit}', timeout=20).json()
         candles = [{'t': int(x[0]), 'open': x[1], 'high': x[2], 'low': x[3], 'close': x[4], 'volume': x[5]} for x in reversed(data.get('data') or [])]
     elif p == 'bybit':
-        iv = {'1m':'1','5m':'5','15m':'15','1h':'60','4h':'240','1d':'D'}.get(interval, interval)
+        iv = {'1m': '1', '5m': '5', '15m': '15', '1h': '60', '4h': '240', '1d': 'D'}.get(interval, interval)
         data = requests.get(f'https://api.bybit.com/v5/market/kline?category=spot&symbol={s}&interval={iv}&limit={limit}', timeout=20).json()
         candles = [{'t': int(x[0]), 'open': x[1], 'high': x[2], 'low': x[3], 'close': x[4], 'volume': x[5]} for x in reversed(((data.get('result') or {}).get('list') or []))]
     elif p == 'gate':
         data = requests.get(f'https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair={s}&interval={interval}&limit={limit}', timeout=20).json()
-        candles = [{'t': int(float(x[0]))*1000, 'volume': x[1], 'close': x[2], 'high': x[3], 'low': x[4], 'open': x[5]} for x in data]
+        candles = [{'t': int(float(x[0])) * 1000, 'volume': x[1], 'close': x[2], 'high': x[3], 'low': x[4], 'open': x[5]} for x in data]
     else:
         raise RuntimeError(f'unsupported provider={provider}')
     return {'provider': p, 'symbol': s, 'interval': interval, 'limit': limit, 'candles': candles, 'time_utc': now()}
+
+
+def get_depth(provider: str, symbol: str, limit: int) -> Dict[str, Any]:
+    p = provider.lower()
+    s = normalize(p, symbol)
+    if p == 'binance':
+        data = requests.get(f'https://api.binance.com/api/v3/depth?symbol={s}&limit={limit}', timeout=18).json()
+        bids, asks = data.get('bids') or [], data.get('asks') or []
+    elif p == 'okx':
+        data = requests.get(f'https://www.okx.com/api/v5/market/books?instId={s}&sz={limit}', timeout=18).json()
+        item = (data.get('data') or [{}])[0]
+        bids, asks = item.get('bids') or [], item.get('asks') or []
+    elif p == 'bybit':
+        data = requests.get(f'https://api.bybit.com/v5/market/orderbook?category=spot&symbol={s}&limit={limit}', timeout=18).json()
+        item = data.get('result') or {}
+        bids, asks = item.get('b') or [], item.get('a') or []
+    elif p == 'gate':
+        data = requests.get(f'https://api.gateio.ws/api/v4/spot/order_book?currency_pair={s}&limit={limit}', timeout=18).json()
+        bids, asks = data.get('bids') or [], data.get('asks') or []
+    else:
+        raise RuntimeError(f'unsupported provider={provider}')
+    return {'provider': p, 'symbol': s, 'bids': bids[:limit], 'asks': asks[:limit], 'time_utc': now()}
+
+
+def get_trades(provider: str, symbol: str, limit: int) -> Dict[str, Any]:
+    p = provider.lower()
+    s = normalize(p, symbol)
+    trades: List[Dict[str, Any]] = []
+    if p == 'binance':
+        data = requests.get(f'https://api.binance.com/api/v3/trades?symbol={s}&limit={limit}', timeout=18).json()
+        trades = [{'price': x.get('price'), 'qty': x.get('qty'), 'side': 'sell' if x.get('isBuyerMaker') else 'buy', 'time': x.get('time')} for x in data]
+    elif p == 'okx':
+        data = requests.get(f'https://www.okx.com/api/v5/market/trades?instId={s}&limit={limit}', timeout=18).json()
+        trades = [{'price': x.get('px'), 'qty': x.get('sz'), 'side': x.get('side'), 'time': x.get('ts')} for x in (data.get('data') or [])]
+    elif p == 'bybit':
+        data = requests.get(f'https://api.bybit.com/v5/market/recent-trade?category=spot&symbol={s}&limit={limit}', timeout=18).json()
+        trades = [{'price': x.get('price'), 'qty': x.get('size'), 'side': x.get('side'), 'time': x.get('time')} for x in ((data.get('result') or {}).get('list') or [])]
+    elif p == 'gate':
+        data = requests.get(f'https://api.gateio.ws/api/v4/spot/trades?currency_pair={s}&limit={limit}', timeout=18).json()
+        trades = [{'price': x.get('price'), 'qty': x.get('amount'), 'side': x.get('side'), 'time': x.get('create_time_ms')} for x in data]
+    else:
+        raise RuntimeError(f'unsupported provider={provider}')
+    return {'provider': p, 'symbol': s, 'trades': trades[:limit], 'time_utc': now()}
+
+
+@router.get('/providers')
+def providers() -> Dict[str, Any]:
+    return {
+        'status': 'ok',
+        'providers': ['binance', 'okx', 'bybit', 'gate'],
+        'symbols': ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'],
+        'channels': ['ticker', 'trades', 'depth', 'candles'],
+        'mode': 'rest_snapshot_plus_browser_websocket',
+    }
 
 
 @router.post('/prices', dependencies=[Depends(require_key)])
@@ -120,6 +186,26 @@ def candles(req: CandleRequest) -> Dict[str, Any]:
     try:
         result = get_candles(req.provider, req.symbol, req.interval, req.limit)
         db.audit('exchange_market_candles', 'exchange_market', f'{req.provider}:{req.symbol}', req.model_dump(), 'success', 'low', 'not_required')
+        return {'status': 'success', **result}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post('/depth', dependencies=[Depends(require_key)])
+def depth(req: DepthRequest) -> Dict[str, Any]:
+    try:
+        result = get_depth(req.provider, req.symbol, req.limit)
+        db.audit('exchange_market_depth', 'exchange_market', f'{req.provider}:{req.symbol}', req.model_dump(), 'success', 'low', 'not_required')
+        return {'status': 'success', **result}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post('/trades', dependencies=[Depends(require_key)])
+def trades(req: TradesRequest) -> Dict[str, Any]:
+    try:
+        result = get_trades(req.provider, req.symbol, req.limit)
+        db.audit('exchange_market_trades', 'exchange_market', f'{req.provider}:{req.symbol}', req.model_dump(), 'success', 'low', 'not_required')
         return {'status': 'success', **result}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
