@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -42,6 +42,12 @@ class SignalAnalyzeRequest(BaseModel):
     persist: bool = True
 
 
+class SignalStatusUpdate(BaseModel):
+    status: str = Field(pattern='^(open|acknowledged|ignored|reviewed|closed)$')
+    operator: str = 'local-operator'
+    note: str = ''
+
+
 def severity(score: float) -> str:
     if score >= 85:
         return 'high'
@@ -60,6 +66,7 @@ def store_signal(item: Dict[str, Any]) -> Dict[str, Any]:
     sid = signal_id(item['symbol'], item['signal_type'])
     payload = dict(item)
     payload['signal_id'] = sid
+    payload['review_history'] = []
     ts = now()
     with db.connect() as conn:
         conn.execute('INSERT INTO strategy_signal_events (signal_id,symbol,signal_type,severity,score,status,payload_json,created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', (sid, item['symbol'], item['signal_type'], item['severity'], float(item['score']), 'open', jd(payload), ts))
@@ -137,12 +144,31 @@ def analyze(req: SignalAnalyzeRequest) -> Dict[str, Any]:
     }
 
 
+def read_events(limit: int = 100, status: Optional[str] = None, severity_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+    ensure_tables()
+    clauses = ['1=1']
+    args: List[Any] = []
+    if status:
+        clauses.append('status=?')
+        args.append(status)
+    if severity_filter:
+        clauses.append('severity=?')
+        args.append(severity_filter)
+    args.append(limit)
+    with db.connect() as conn:
+        data = [dict(r) for r in conn.execute(f"SELECT * FROM strategy_signal_events WHERE {' AND '.join(clauses)} ORDER BY id DESC LIMIT ?", tuple(args)).fetchall()]
+    for r in data:
+        r['payload'] = json.loads(r.pop('payload_json') or '{}')
+    return data
+
+
 @router.get('/config')
 def config() -> Dict[str, Any]:
     return {
         'status': 'ok',
-        'version': '16.0-strategy-research-signal-center',
+        'version': '16.1-signal-alert-command-center',
         'signal_types': ['CROSS_EXCHANGE_SPREAD_WATCH', 'MOMENTUM_LONG_WATCH', 'MOMENTUM_SHORT_WATCH', 'LIQUIDITY_HEALTHY_WATCH'],
+        'statuses': ['open', 'acknowledged', 'ignored', 'reviewed', 'closed'],
         'safety': 'research_only_no_auto_trade',
     }
 
@@ -158,29 +184,67 @@ def analyze_signals(req: SignalAnalyzeRequest) -> Dict[str, Any]:
 
 
 @router.get('/events')
-def events(limit: int = 100) -> Dict[str, Any]:
+def events(limit: int = 100, status: Optional[str] = None, severity: Optional[str] = None) -> Dict[str, Any]:
+    return {'status': 'ok', 'events': read_events(limit=limit, status=status, severity_filter=severity)}
+
+
+@router.get('/summary')
+def summary(limit: int = 200) -> Dict[str, Any]:
+    data = read_events(limit=limit)
+    open_items = [x for x in data if x['status'] == 'open']
+    high_open = [x for x in open_items if x['severity'] == 'high']
+    medium_open = [x for x in open_items if x['severity'] == 'medium']
+    reviewed = [x for x in data if x['status'] in {'acknowledged', 'reviewed', 'closed'}]
+    latest_high = high_open[0] if high_open else None
+    return {
+        'status': 'ok',
+        'counts': {
+            'total_recent': len(data),
+            'open': len(open_items),
+            'high_open': len(high_open),
+            'medium_open': len(medium_open),
+            'reviewed_or_closed': len(reviewed),
+        },
+        'latest_high': latest_high,
+        'latest': data[:10],
+        'safety': 'research_only_no_auto_trade',
+        'time_utc': now(),
+    }
+
+
+@router.post('/events/{signal_id}/status', dependencies=[Depends(require_key)])
+def update_signal_status(signal_id: str, req: SignalStatusUpdate) -> Dict[str, Any]:
     ensure_tables()
     with db.connect() as conn:
-        rows = [dict(r) for r in conn.execute('SELECT * FROM strategy_signal_events ORDER BY id DESC LIMIT ?', (limit,)).fetchall()]
-    for r in rows:
-        r['payload'] = json.loads(r.pop('payload_json') or '{}')
-    return {'status': 'ok', 'events': rows}
+        row = conn.execute('SELECT * FROM strategy_signal_events WHERE signal_id=?', (signal_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail='signal not found')
+        item = dict(row)
+        payload = json.loads(item.get('payload_json') or '{}')
+        history = payload.get('review_history') or []
+        history.append({'status': req.status, 'operator': req.operator, 'note': req.note, 'time_utc': now()})
+        payload['review_history'] = history
+        conn.execute('UPDATE strategy_signal_events SET status=?, payload_json=? WHERE signal_id=?', (req.status, jd(payload), signal_id))
+    db.audit('strategy_signal_status_update', 'strategy_signal', signal_id, req.model_dump(), req.status, 'low', 'not_required')
+    return {'status': 'success', 'signal_id': signal_id, 'new_status': req.status, 'payload': payload}
 
 
 @router.get('/report')
 def report(limit: int = 50) -> Dict[str, Any]:
-    data = events(limit=limit)['events']
+    data = read_events(limit=limit)
     high = [x for x in data if x['severity'] == 'high']
     medium = [x for x in data if x['severity'] == 'medium']
+    open_items = [x for x in data if x['status'] == 'open']
     content = '\n'.join([
         '# Strategy Signal Report',
         f'- created_at_utc: {now()}',
         f'- total_signals: {len(data)}',
+        f'- open_signals: {len(open_items)}',
         f'- high: {len(high)}',
         f'- medium: {len(medium)}',
         '',
         '## Top Signals',
-        *[f"- [{x['severity']}] {x['symbol']} {x['signal_type']} score={x['score']}" for x in data[:20]],
+        *[f"- [{x['severity']}/{x['status']}] {x['symbol']} {x['signal_type']} score={x['score']}" for x in data[:20]],
         '',
         '## Safety',
         '- Research only. No automatic trading, no account connection, no key access.',
