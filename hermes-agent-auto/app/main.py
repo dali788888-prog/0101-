@@ -69,7 +69,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '16.2-signal-daily-workspace-automation',
+        'version': '16.3-scheduled-signal-automation',
     }
 
 
