@@ -71,7 +71,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '16.6-unified-trade-readiness-command',
+        'version': '16.7-signal-readiness-ticket',
     }
 
 
@@ -147,7 +147,12 @@ def signal_workspace_ui() -> str:
 
 @app.get('/trade-readiness-ui', response_class=HTMLResponse)
 def trade_readiness_ui() -> str:
-    return html_file('trade_readiness_ui.html', '<h1>Trade Readiness UI file not found.</h1>')
+    return html_file('trade_readiness_ui_v167.html', '<h1>Readiness v16.7 UI file not found.</h1>')
+
+
+@app.get('/trade-readiness-v165-ui', response_class=HTMLResponse)
+def trade_readiness_v165_ui() -> str:
+    return html_file('trade_readiness_ui.html', '<h1>Readiness v16.5 UI file not found.</h1>')
 
 
 @app.post('/tron/permissions', response_model=TronPermissionDraftOut)
