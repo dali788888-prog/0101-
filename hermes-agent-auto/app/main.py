@@ -26,6 +26,7 @@ from app.agent_runs import router as agent_runs_router
 from app.exchange_market import router as exchange_market_router
 from app.strategy_signals import router as strategy_signals_router
 from app.trade_readiness import router as trade_readiness_router
+from app.trade_lifecycle import router as trade_lifecycle_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -62,6 +63,7 @@ app.include_router(agent_runs_router)
 app.include_router(exchange_market_router)
 app.include_router(strategy_signals_router)
 app.include_router(trade_readiness_router)
+app.include_router(trade_lifecycle_router)
 
 
 @app.get('/health')
@@ -71,7 +73,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '16.8-readiness-risk-rule-engine',
+        'version': '17.0-trade-lifecycle-review-center',
     }
 
 
@@ -148,6 +150,11 @@ def signal_workspace_ui() -> str:
 @app.get('/trade-readiness-ui', response_class=HTMLResponse)
 def trade_readiness_ui() -> str:
     return html_file('trade_readiness_ui_v168.html', '<h1>Readiness v16.8 UI file not found.</h1>')
+
+
+@app.get('/trade-lifecycle-ui', response_class=HTMLResponse)
+def trade_lifecycle_ui() -> str:
+    return html_file('trade_lifecycle_ui.html', '<h1>Trade Lifecycle UI file not found.</h1>')
 
 
 @app.get('/trade-readiness-v167-ui', response_class=HTMLResponse)
