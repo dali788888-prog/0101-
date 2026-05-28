@@ -20,6 +20,7 @@ from app.rwa_scaffold import router as rwa_scaffold_router
 from app.rwa_codegen import router as rwa_codegen_router
 from app.rwa_quality import router as rwa_quality_router
 from app.rwa_fixit import router as rwa_fixit_router
+from app.commercial_os import router as commercial_os_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -50,6 +51,7 @@ app.include_router(rwa_scaffold_router)
 app.include_router(rwa_codegen_router)
 app.include_router(rwa_quality_router)
 app.include_router(rwa_fixit_router)
+app.include_router(commercial_os_router)
 
 
 @app.get('/health')
@@ -59,7 +61,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '10.21-rwa-fixit-engine',
+        'version': '15.0-assetops-commercial-os-foundation',
     }
 
 
@@ -106,6 +108,11 @@ def rwa_mine_ui() -> str:
 @app.get('/rwa-scaffold-ui', response_class=HTMLResponse)
 def rwa_scaffold_ui() -> str:
     return html_file('rwa_scaffold_ui.html', '<h1>RWA Scaffold UI file not found.</h1>')
+
+
+@app.get('/commercial-os-ui', response_class=HTMLResponse)
+def commercial_os_ui() -> str:
+    return html_file('commercial_os_ui.html', '<h1>Commercial OS UI file not found.</h1>')
 
 
 @app.post('/tron/permissions', response_model=TronPermissionDraftOut)
