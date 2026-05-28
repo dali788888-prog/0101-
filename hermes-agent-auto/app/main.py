@@ -67,7 +67,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '15.7-websocket-market-depth-trades',
+        'version': '15.8-embedded-websocket-market-command',
     }
 
 
@@ -78,7 +78,7 @@ def html_file(name: str, fallback: str) -> str:
 
 @app.get('/', response_class=HTMLResponse)
 def index() -> str:
-    return html_file('home_ui.html', '<h1>Hermes AssetOps OS</h1><p>home_ui.html not found.</p>')
+    return html_file('home_ui_v158.html', '<h1>Hermes v15.8 UI file not found.</h1>')
 
 
 @app.get('/legacy-ui', response_class=HTMLResponse)
