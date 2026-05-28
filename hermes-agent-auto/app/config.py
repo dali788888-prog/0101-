@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ''
     webhook_url: str = ''
 
+    live_gate_enabled: bool = False
+    live_gate_max_order_usdt: str = '20'
+    live_gate_daily_limit_usdt: str = '50'
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
