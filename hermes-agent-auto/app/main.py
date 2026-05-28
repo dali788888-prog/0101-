@@ -57,7 +57,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '10.19-rwa-quality-checker',
+        'version': '10.20-rwa-quality-scan-ui',
     }
 
 
