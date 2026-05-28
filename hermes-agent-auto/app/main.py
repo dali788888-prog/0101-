@@ -100,7 +100,7 @@ def html_file(name: str, fallback: str) -> str:
 
 @app.get('/', response_class=HTMLResponse)
 def index() -> str:
-    return html_file('home_ui_v190.html', '<h1>Hermes v19.0 UI file not found.</h1>')
+    return html_file('home_ui_v200.html', '<h1>Hermes v20.0 UI file not found.</h1>')
 
 
 @app.get('/legacy-ui', response_class=HTMLResponse)
