@@ -71,7 +71,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '16.7-signal-readiness-ticket',
+        'version': '16.8-readiness-risk-rule-engine',
     }
 
 
@@ -147,6 +147,11 @@ def signal_workspace_ui() -> str:
 
 @app.get('/trade-readiness-ui', response_class=HTMLResponse)
 def trade_readiness_ui() -> str:
+    return html_file('trade_readiness_ui_v168.html', '<h1>Readiness v16.8 UI file not found.</h1>')
+
+
+@app.get('/trade-readiness-v167-ui', response_class=HTMLResponse)
+def trade_readiness_v167_ui() -> str:
     return html_file('trade_readiness_ui_v167.html', '<h1>Readiness v16.7 UI file not found.</h1>')
 
 
