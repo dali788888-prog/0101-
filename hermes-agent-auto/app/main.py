@@ -69,7 +69,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '16.1-signal-alert-command-center',
+        'version': '16.2-signal-daily-workspace-automation',
     }
 
 
@@ -136,6 +136,11 @@ def market_matrix_ui() -> str:
 @app.get('/strategy-signals-ui', response_class=HTMLResponse)
 def strategy_signals_ui() -> str:
     return html_file('strategy_signals_ui.html', '<h1>Strategy Signals UI file not found.</h1>')
+
+
+@app.get('/signal-workspace-ui', response_class=HTMLResponse)
+def signal_workspace_ui() -> str:
+    return html_file('signal_workspace_ui.html', '<h1>Signal Workspace UI file not found.</h1>')
 
 
 @app.post('/tron/permissions', response_model=TronPermissionDraftOut)
