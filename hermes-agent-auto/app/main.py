@@ -69,7 +69,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '16.0-strategy-research-signal-center',
+        'version': '16.1-signal-alert-command-center',
     }
 
 
@@ -80,7 +80,7 @@ def html_file(name: str, fallback: str) -> str:
 
 @app.get('/', response_class=HTMLResponse)
 def index() -> str:
-    return html_file('home_ui_v158.html', '<h1>Hermes v15.8 UI file not found.</h1>')
+    return html_file('home_ui_v161.html', '<h1>Hermes v16.1 UI file not found.</h1>')
 
 
 @app.get('/legacy-ui', response_class=HTMLResponse)
