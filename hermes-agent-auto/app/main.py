@@ -22,6 +22,8 @@ from app.rwa_quality import router as rwa_quality_router
 from app.rwa_fixit import router as rwa_fixit_router
 from app.commercial_os import router as commercial_os_router
 from app.operator_chat import router as operator_chat_router
+from app.agent_runs import router as agent_runs_router
+from app.exchange_market import router as exchange_market_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -54,6 +56,8 @@ app.include_router(rwa_quality_router)
 app.include_router(rwa_fixit_router)
 app.include_router(commercial_os_router)
 app.include_router(operator_chat_router)
+app.include_router(agent_runs_router)
+app.include_router(exchange_market_router)
 
 
 @app.get('/health')
@@ -63,7 +67,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '15.5-operator-workspace-protected-records',
+        'version': '15.6-live-trace-market-dashboard',
     }
 
 
