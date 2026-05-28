@@ -55,7 +55,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '10.17-rwa-code-progressor',
+        'version': '10.18-rwa-codegen-ui',
     }
 
 
