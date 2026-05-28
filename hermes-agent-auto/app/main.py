@@ -30,6 +30,7 @@ from app.trade_lifecycle import router as trade_lifecycle_router
 from app.paper_trading import router as paper_trading_router
 from app.portfolio_risk import router as portfolio_risk_router
 from app.release_gate import router as release_gate_router
+from app.ops_automation import router as ops_automation_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -70,6 +71,7 @@ app.include_router(trade_lifecycle_router)
 app.include_router(paper_trading_router)
 app.include_router(portfolio_risk_router)
 app.include_router(release_gate_router)
+app.include_router(ops_automation_router)
 
 
 @app.get('/health')
@@ -79,7 +81,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '18.3-unified-commercial-ops-command',
+        'version': '18.6-ops-reports-release-inspection-alerts',
     }
 
 
@@ -96,6 +98,11 @@ def index() -> str:
 @app.get('/legacy-ui', response_class=HTMLResponse)
 def legacy_ui() -> str:
     return '<h1>Legacy UI disabled</h1><p>已取消旧版入口，请使用首页侧边栏。</p>'
+
+
+@app.get('/ops-automation-ui', response_class=HTMLResponse)
+def ops_automation_ui() -> str:
+    return html_file('ops_automation_ui.html', '<h1>Ops Automation UI file not found.</h1>')
 
 
 @app.get('/release-gate-ui', response_class=HTMLResponse)
