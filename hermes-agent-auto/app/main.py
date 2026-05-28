@@ -17,6 +17,7 @@ from app.quant_live_predict import router as quant_live_predict_router
 from app.quant_emergency import router as quant_emergency_router
 from app.rwa_mine import router as rwa_mine_router
 from app.rwa_scaffold import router as rwa_scaffold_router
+from app.rwa_codegen import router as rwa_codegen_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -44,6 +45,7 @@ app.include_router(quant_live_predict_router)
 app.include_router(quant_emergency_router)
 app.include_router(rwa_mine_router)
 app.include_router(rwa_scaffold_router)
+app.include_router(rwa_codegen_router)
 
 
 @app.get('/health')
@@ -53,7 +55,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '10.16-rwa-scaffold-embedded',
+        'version': '10.17-rwa-code-progressor',
     }
 
 
