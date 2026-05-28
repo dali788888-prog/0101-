@@ -67,7 +67,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '15.8-embedded-websocket-market-command',
+        'version': '15.9-multi-exchange-market-matrix',
     }
 
 
@@ -124,6 +124,11 @@ def commercial_os_ui() -> str:
 @app.get('/market-ws-ui', response_class=HTMLResponse)
 def market_ws_ui() -> str:
     return html_file('market_ws_ui.html', '<h1>Market WebSocket UI file not found.</h1>')
+
+
+@app.get('/market-matrix-ui', response_class=HTMLResponse)
+def market_matrix_ui() -> str:
+    return html_file('market_matrix_ui.html', '<h1>Market Matrix UI file not found.</h1>')
 
 
 @app.post('/tron/permissions', response_model=TronPermissionDraftOut)
