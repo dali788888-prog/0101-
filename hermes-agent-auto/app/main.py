@@ -63,7 +63,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '15.4-command-center-fixed-chat',
+        'version': '15.5-operator-workspace-protected-records',
     }
 
 
