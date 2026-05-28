@@ -31,6 +31,7 @@ from app.paper_trading import router as paper_trading_router
 from app.portfolio_risk import router as portfolio_risk_router
 from app.release_gate import router as release_gate_router
 from app.ops_automation import router as ops_automation_router
+from app.ops_workflow import router as ops_workflow_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -72,6 +73,7 @@ app.include_router(paper_trading_router)
 app.include_router(portfolio_risk_router)
 app.include_router(release_gate_router)
 app.include_router(ops_automation_router)
+app.include_router(ops_workflow_router)
 
 
 @app.get('/health')
@@ -81,7 +83,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '18.6-ops-reports-release-inspection-alerts',
+        'version': '19.0-ops-command-workflow-center',
     }
 
 
@@ -92,7 +94,7 @@ def html_file(name: str, fallback: str) -> str:
 
 @app.get('/', response_class=HTMLResponse)
 def index() -> str:
-    return html_file('home_ui_v183.html', '<h1>Hermes v18.3 UI file not found.</h1>')
+    return html_file('home_ui_v190.html', '<h1>Hermes v19.0 UI file not found.</h1>')
 
 
 @app.get('/legacy-ui', response_class=HTMLResponse)
