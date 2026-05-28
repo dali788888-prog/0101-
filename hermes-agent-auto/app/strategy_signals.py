@@ -24,6 +24,10 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def today_utc() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
 def jd(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, sort_keys=True)
 
@@ -31,6 +35,13 @@ def jd(data: Any) -> str:
 def ensure_tables() -> None:
     with db.connect() as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS strategy_signal_events (id INTEGER PRIMARY KEY AUTOINCREMENT,signal_id TEXT NOT NULL UNIQUE,symbol TEXT NOT NULL,signal_type TEXT NOT NULL,severity TEXT NOT NULL,score REAL NOT NULL,status TEXT NOT NULL DEFAULT 'open',payload_json TEXT NOT NULL,created_at TEXT NOT NULL)''')
+
+
+def ensure_operator_workspace_tables() -> None:
+    with db.connect() as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS operator_chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,role TEXT NOT NULL,content TEXT NOT NULL,model TEXT,status TEXT NOT NULL DEFAULT 'ok',created_at TEXT NOT NULL)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS operator_work_notes (id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,content TEXT NOT NULL,tags TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS operator_period_reports (id INTEGER PRIMARY KEY AUTOINCREMENT,period TEXT NOT NULL,title TEXT NOT NULL,content TEXT NOT NULL,metrics_json TEXT NOT NULL,created_at TEXT NOT NULL)''')
 
 
 class SignalAnalyzeRequest(BaseModel):
@@ -48,6 +59,16 @@ class SignalStatusUpdate(BaseModel):
     note: str = ''
 
 
+class SignalWorkspaceSyncRequest(BaseModel):
+    period: str = Field(default='daily', pattern='^(daily|weekly|monthly)$')
+    limit: int = Field(default=80, ge=10, le=500)
+    create_high_notes: bool = True
+    create_report: bool = True
+    notify_operator: bool = True
+    force: bool = False
+    operator: str = 'local-operator'
+
+
 def severity(score: float) -> str:
     if score >= 85:
         return 'high'
@@ -61,12 +82,24 @@ def signal_id(symbol: str, signal_type: str) -> str:
     return f'sig-{stamp}-{symbol}-{signal_type}'.replace('/', '-').replace('_', '-')
 
 
+def current_run_id() -> Optional[str]:
+    try:
+        with db.connect() as conn:
+            row = conn.execute("SELECT run_id FROM agent_runs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1").fetchone()
+            if not row:
+                row = conn.execute('SELECT run_id FROM agent_runs ORDER BY id DESC LIMIT 1').fetchone()
+        return dict(row)['run_id'] if row else None
+    except Exception:
+        return None
+
+
 def store_signal(item: Dict[str, Any]) -> Dict[str, Any]:
     ensure_tables()
     sid = signal_id(item['symbol'], item['signal_type'])
     payload = dict(item)
     payload['signal_id'] = sid
     payload['review_history'] = []
+    payload['source_run_id'] = current_run_id()
     ts = now()
     with db.connect() as conn:
         conn.execute('INSERT INTO strategy_signal_events (signal_id,symbol,signal_type,severity,score,status,payload_json,created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', (sid, item['symbol'], item['signal_type'], item['severity'], float(item['score']), 'open', jd(payload), ts))
@@ -162,13 +195,146 @@ def read_events(limit: int = 100, status: Optional[str] = None, severity_filter:
     return data
 
 
+def signal_report_content(data: List[Dict[str, Any]], title: str = 'Strategy Signal Report') -> str:
+    high = [x for x in data if x['severity'] == 'high']
+    medium = [x for x in data if x['severity'] == 'medium']
+    open_items = [x for x in data if x['status'] == 'open']
+    reviewed = [x for x in data if x['status'] in {'acknowledged', 'reviewed', 'closed'}]
+    return '\n'.join([
+        f'# {title}',
+        f'- created_at_utc: {now()}',
+        f'- source_run_id: {current_run_id() or "none"}',
+        f'- total_signals: {len(data)}',
+        f'- open_signals: {len(open_items)}',
+        f'- high: {len(high)}',
+        f'- medium: {len(medium)}',
+        f'- reviewed_or_closed: {len(reviewed)}',
+        '',
+        '## Top Signals',
+        *[f"- [{x['severity']}/{x['status']}] {x['symbol']} {x['signal_type']} score={x['score']} run_id={(x.get('payload') or {}).get('source_run_id') or 'none'}" for x in data[:30]],
+        '',
+        '## High / Medium Signal Notes',
+        *[f"- {x['symbol']} {x['signal_type']}: {(x.get('payload') or {}).get('summary', '')}" for x in data if x['severity'] in {'high', 'medium'}][:30],
+        '',
+        '## Safety',
+        '- Research only. No automatic trading, no account connection, no key access.',
+    ])
+
+
+def workspace_report_exists(day: str) -> Optional[Dict[str, Any]]:
+    ensure_operator_workspace_tables()
+    with db.connect() as conn:
+        row = conn.execute("SELECT * FROM operator_period_reports WHERE period='signal_daily' AND title LIKE ? ORDER BY id DESC LIMIT 1", (f'%{day}%',)).fetchone()
+    return dict(row) if row else None
+
+
+def create_operator_note(title: str, content: str, tags: str) -> Dict[str, Any]:
+    ensure_operator_workspace_tables()
+    ts = now()
+    with db.connect() as conn:
+        cur = conn.execute('INSERT INTO operator_work_notes (title,content,tags,created_at,updated_at) VALUES (?, ?, ?, ?, ?)', (title, content, tags, ts, ts))
+        row = conn.execute('SELECT * FROM operator_work_notes WHERE id=?', (int(cur.lastrowid),)).fetchone()
+    return dict(row)
+
+
+def create_operator_report(period: str, title: str, content: str, metrics: Dict[str, Any]) -> Dict[str, Any]:
+    ensure_operator_workspace_tables()
+    with db.connect() as conn:
+        cur = conn.execute('INSERT INTO operator_period_reports (period,title,content,metrics_json,created_at) VALUES (?, ?, ?, ?, ?)', (period, title, content, jd(metrics), now()))
+        row = conn.execute('SELECT * FROM operator_period_reports WHERE id=?', (int(cur.lastrowid),)).fetchone()
+    return dict(row)
+
+
+def notify_operator(content: str, status: str = 'signal_workspace_sync') -> Dict[str, Any]:
+    ensure_operator_workspace_tables()
+    with db.connect() as conn:
+        cur = conn.execute('INSERT INTO operator_chat_messages (session_id,role,content,model,status,created_at) VALUES (?, ?, ?, ?, ?, ?)', ('operator-main', 'assistant', content, get_settings().ollama_model, status, now()))
+        row = conn.execute('SELECT * FROM operator_chat_messages WHERE id=?', (int(cur.lastrowid),)).fetchone()
+    return dict(row)
+
+
+def sync_signal_workspace(req: SignalWorkspaceSyncRequest) -> Dict[str, Any]:
+    data = read_events(limit=req.limit)
+    day = today_utc()
+    existing = workspace_report_exists(day)
+    high_items = [x for x in data if x['severity'] == 'high']
+    medium_items = [x for x in data if x['severity'] == 'medium']
+    created_notes: List[Dict[str, Any]] = []
+    created_report: Optional[Dict[str, Any]] = None
+    notification: Optional[Dict[str, Any]] = None
+
+    if req.create_high_notes:
+        for x in high_items[:20]:
+            payload = x.get('payload') or {}
+            sid = x.get('signal_id')
+            title = f'高分策略信号：{x["symbol"]} {x["signal_type"]}'
+            content = '\n'.join([
+                f'- signal_id: {sid}',
+                f'- severity: {x["severity"]}',
+                f'- score: {x["score"]}',
+                f'- status: {x["status"]}',
+                f'- source_run_id: {payload.get("source_run_id") or "none"}',
+                '',
+                payload.get('summary', ''),
+                '',
+                payload.get('risk_note', ''),
+            ])
+            with db.connect() as conn:
+                exists = conn.execute('SELECT id FROM operator_work_notes WHERE tags=? AND content LIKE ? LIMIT 1', ('strategy_signal_high', f'%{sid}%')).fetchone()
+            if not exists or req.force:
+                created_notes.append(create_operator_note(title, content, 'strategy_signal_high'))
+
+    metrics = {
+        'day': day,
+        'period': req.period,
+        'total_signals': len(data),
+        'high': len(high_items),
+        'medium': len(medium_items),
+        'open': len([x for x in data if x['status'] == 'open']),
+        'source_run_id': current_run_id(),
+        'created_notes': len(created_notes),
+    }
+    content = signal_report_content(data, title=f'Hermes Signal Daily Workspace Report {day}')
+    if req.create_report and (req.force or not existing):
+        created_report = create_operator_report('signal_daily', f'Signal Daily Report {day}', content, metrics)
+    elif existing:
+        created_report = existing
+
+    if req.notify_operator:
+        msg = '\n'.join([
+            f'信号日报同步完成：{day}',
+            f'- total_signals: {metrics["total_signals"]}',
+            f'- high: {metrics["high"]}',
+            f'- medium: {metrics["medium"]}',
+            f'- open: {metrics["open"]}',
+            f'- created_high_notes: {len(created_notes)}',
+            f'- report_id: {created_report.get("id") if created_report else "none"}',
+            '',
+            '说明：Research Only，不自动下单。',
+        ])
+        notification = notify_operator(msg)
+
+    db.audit('strategy_signal_workspace_sync', 'strategy_signals', day, metrics, 'success', 'low', 'not_required')
+    return {
+        'status': 'success',
+        'day': day,
+        'already_had_report': bool(existing),
+        'report': created_report,
+        'created_notes': created_notes,
+        'notification': notification,
+        'metrics': metrics,
+        'safety': 'research_only_no_auto_trade',
+    }
+
+
 @router.get('/config')
 def config() -> Dict[str, Any]:
     return {
         'status': 'ok',
-        'version': '16.1-signal-alert-command-center',
+        'version': '16.2-signal-daily-workspace-automation',
         'signal_types': ['CROSS_EXCHANGE_SPREAD_WATCH', 'MOMENTUM_LONG_WATCH', 'MOMENTUM_SHORT_WATCH', 'LIQUIDITY_HEALTHY_WATCH'],
         'statuses': ['open', 'acknowledged', 'ignored', 'reviewed', 'closed'],
+        'workspace_sync': ['daily_report', 'high_signal_notes', 'operator_notification', 'run_id_binding'],
         'safety': 'research_only_no_auto_trade',
     }
 
@@ -177,7 +343,7 @@ def config() -> Dict[str, Any]:
 def analyze_signals(req: SignalAnalyzeRequest) -> Dict[str, Any]:
     try:
         result = analyze(req)
-        db.audit('strategy_signal_analyze', 'strategy_signals', 'multi', {'symbols': req.symbols, 'providers': req.providers, 'signals': result['signal_count']}, 'success', 'low', 'not_required')
+        db.audit('strategy_signal_analyze', 'strategy_signals', 'multi', {'symbols': req.symbols, 'providers': req.providers, 'signals': result['signal_count'], 'source_run_id': current_run_id()}, 'success', 'low', 'not_required')
         return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -196,6 +362,7 @@ def summary(limit: int = 200) -> Dict[str, Any]:
     medium_open = [x for x in open_items if x['severity'] == 'medium']
     reviewed = [x for x in data if x['status'] in {'acknowledged', 'reviewed', 'closed'}]
     latest_high = high_open[0] if high_open else None
+    workspace_status = signal_workspace_status()
     return {
         'status': 'ok',
         'counts': {
@@ -207,6 +374,7 @@ def summary(limit: int = 200) -> Dict[str, Any]:
         },
         'latest_high': latest_high,
         'latest': data[:10],
+        'workspace': workspace_status,
         'safety': 'research_only_no_auto_trade',
         'time_utc': now(),
     }
@@ -222,9 +390,24 @@ def update_signal_status(signal_id: str, req: SignalStatusUpdate) -> Dict[str, A
         item = dict(row)
         payload = json.loads(item.get('payload_json') or '{}')
         history = payload.get('review_history') or []
-        history.append({'status': req.status, 'operator': req.operator, 'note': req.note, 'time_utc': now()})
+        review_item = {'status': req.status, 'operator': req.operator, 'note': req.note, 'time_utc': now(), 'source_run_id': payload.get('source_run_id')}
+        history.append(review_item)
         payload['review_history'] = history
         conn.execute('UPDATE strategy_signal_events SET status=?, payload_json=? WHERE signal_id=?', (req.status, jd(payload), signal_id))
+    if req.status in {'acknowledged', 'reviewed', 'closed'}:
+        title = f'信号复盘记录：{item["symbol"]} {item["signal_type"]}'
+        content = '\n'.join([
+            f'- signal_id: {signal_id}',
+            f'- new_status: {req.status}',
+            f'- operator: {req.operator}',
+            f'- source_run_id: {payload.get("source_run_id") or "none"}',
+            f'- note: {req.note}',
+            '',
+            payload.get('summary', ''),
+            '',
+            payload.get('risk_note', ''),
+        ])
+        create_operator_note(title, content, 'strategy_signal_review')
     db.audit('strategy_signal_status_update', 'strategy_signal', signal_id, req.model_dump(), req.status, 'low', 'not_required')
     return {'status': 'success', 'signal_id': signal_id, 'new_status': req.status, 'payload': payload}
 
@@ -232,21 +415,29 @@ def update_signal_status(signal_id: str, req: SignalStatusUpdate) -> Dict[str, A
 @router.get('/report')
 def report(limit: int = 50) -> Dict[str, Any]:
     data = read_events(limit=limit)
-    high = [x for x in data if x['severity'] == 'high']
-    medium = [x for x in data if x['severity'] == 'medium']
-    open_items = [x for x in data if x['status'] == 'open']
-    content = '\n'.join([
-        '# Strategy Signal Report',
-        f'- created_at_utc: {now()}',
-        f'- total_signals: {len(data)}',
-        f'- open_signals: {len(open_items)}',
-        f'- high: {len(high)}',
-        f'- medium: {len(medium)}',
-        '',
-        '## Top Signals',
-        *[f"- [{x['severity']}/{x['status']}] {x['symbol']} {x['signal_type']} score={x['score']}" for x in data[:20]],
-        '',
-        '## Safety',
-        '- Research only. No automatic trading, no account connection, no key access.',
-    ])
-    return {'status': 'ok', 'content': content, 'events': data}
+    return {'status': 'ok', 'content': signal_report_content(data), 'events': data}
+
+
+@router.get('/workspace-status')
+def signal_workspace_status() -> Dict[str, Any]:
+    day = today_utc()
+    existing = workspace_report_exists(day)
+    notes = []
+    ensure_operator_workspace_tables()
+    with db.connect() as conn:
+        notes = [dict(r) for r in conn.execute("SELECT * FROM operator_work_notes WHERE tags IN ('strategy_signal_high','strategy_signal_review') ORDER BY id DESC LIMIT 20").fetchall()]
+    return {
+        'day': day,
+        'daily_report_generated': bool(existing),
+        'daily_report': existing,
+        'recent_signal_notes': notes,
+        'time_utc': now(),
+    }
+
+
+@router.post('/workspace-sync', dependencies=[Depends(require_key)])
+def workspace_sync(req: SignalWorkspaceSyncRequest) -> Dict[str, Any]:
+    try:
+        return sync_signal_workspace(req)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
