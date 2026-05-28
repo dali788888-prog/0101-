@@ -157,6 +157,7 @@ def readiness_checks(account: Optional[Dict[str, Any]] = None) -> List[Dict[str,
         {'key': 'kill_switch', 'title': '紧急停止开关', 'required': True, 'status': 'on' if kill_switch_on() else 'off'},
         {'key': 'no_auto_submit', 'title': '系统不自动提交交易所订单', 'required': True, 'status': 'enforced'},
         {'key': 'signal_to_ticket_only', 'title': '策略信号只能生成票据草稿', 'required': True, 'status': 'enforced'},
+        {'key': 'risk_engine', 'title': '票据风险评分与阻断规则', 'required': True, 'status': 'enforced'},
     ]
 
 
@@ -205,16 +206,167 @@ def infer_side(signal: Dict[str, Any], override: str = '') -> str:
     return 'buy'
 
 
+def risk_level(score: int) -> str:
+    if score >= 80:
+        return 'critical'
+    if score >= 60:
+        return 'high'
+    if score >= 35:
+        return 'medium'
+    return 'low'
+
+
+def parse_response_json(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return json.loads(ticket.get('response_json') or '{}')
+    except Exception:
+        return {}
+
+
+def evaluate_ticket_risk(ticket_id: int) -> Dict[str, Any]:
+    ticket = row('SELECT * FROM trade_ready_tickets WHERE id=?', (ticket_id,))
+    if not ticket:
+        raise HTTPException(status_code=404, detail='ticket not found')
+    account = row('SELECT * FROM trade_ready_accounts WHERE id=?', (ticket['account_id'],))
+    score = 0
+    blockers: List[str] = []
+    warnings: List[str] = []
+    checks: List[Dict[str, Any]] = []
+
+    def add_check(key: str, title: str, status: str, points: int = 0, blocker: bool = False) -> None:
+        nonlocal score
+        score += max(0, points)
+        item = {'key': key, 'title': title, 'status': status, 'points': points, 'blocker': blocker}
+        checks.append(item)
+        if blocker:
+            blockers.append(title)
+        elif status not in {'pass', 'ok', 'enforced'}:
+            warnings.append(title)
+
+    if not account:
+        add_check('account_exists', '交易账户引用不存在', 'fail', 100, True)
+    else:
+        add_check('account_exists', '交易账户引用存在', 'pass', 0, False)
+        add_check('account_enabled', '交易账户已启用', 'pass' if account.get('enabled') else 'fail', 80 if not account.get('enabled') else 0, not bool(account.get('enabled')))
+        add_check('withdraw_disabled', 'API 提现权限必须禁用', 'pass' if account.get('withdraw_permission') == 'disabled' else 'manual_check', 25 if account.get('withdraw_permission') != 'disabled' else 0, False)
+        add_check('ip_allowlist', 'API 固定 IP 白名单应配置', 'pass' if account.get('ip_allowlist') == 'configured' else 'manual_check', 20 if account.get('ip_allowlist') != 'configured' else 0, False)
+        add_check('market_type', '市场类型检查', 'pass' if account.get('market_type') == 'spot' else 'manual_check', 20 if account.get('market_type') != 'spot' else 0, False)
+
+    quote = dec(ticket.get('estimated_quote_value'))
+    max_quote = dec(ticket.get('max_quote_value'))
+    if quote <= 0:
+        add_check('quote_positive', '票据估算金额必须大于 0', 'fail', 100, True)
+    else:
+        add_check('quote_positive', '票据估算金额大于 0', 'pass')
+    if quote > Decimal('20'):
+        add_check('first_stage_limit', '首阶段单笔不得超过 20 USDT', 'fail', 100, True)
+    else:
+        add_check('first_stage_limit', '首阶段单笔不超过 20 USDT', 'pass')
+    if max_quote > Decimal('20'):
+        add_check('max_quote_limit', 'max_quote_value 超过首阶段上限', 'fail', 100, True)
+    else:
+        add_check('max_quote_limit', 'max_quote_value 未超过首阶段上限', 'pass')
+
+    if ticket.get('order_type') == 'market':
+        add_check('order_type_market', '市价票据存在滑点风险', 'review', 18, False)
+    else:
+        add_check('order_type_limit', '限价票据需要价格复核', 'review', 8, False)
+    if ticket.get('side') == 'sell':
+        add_check('side_sell', '卖出票据需要确认现货余额或仓位', 'review', 10, False)
+    else:
+        add_check('side_buy', '买入票据需要确认可用余额', 'review', 8, False)
+
+    symbol = str(ticket.get('symbol') or '').upper()
+    if not (symbol.endswith('/USDT') or symbol.endswith('/USDC')):
+        add_check('quote_asset', '非 USDT/USDC 计价对需要额外复核', 'review', 12, False)
+    else:
+        add_check('quote_asset', '计价资产为 USDT/USDC', 'pass')
+
+    if ticket.get('approval_state') != 'approved':
+        add_check('approval', '票据尚未人工审批通过', 'pending', 25, False)
+    else:
+        add_check('approval', '票据已人工审批', 'pass')
+    if kill_switch_on():
+        add_check('kill_switch', 'Kill Switch 当前开启，禁止生成手工执行票据', 'blocked', 30, True)
+    else:
+        add_check('kill_switch', 'Kill Switch 已关闭', 'pass')
+
+    response = parse_response_json(ticket)
+    source_signal = response.get('source_signal') or {}
+    signal_score = float(source_signal.get('score') or 0)
+    signal_severity = source_signal.get('severity') or ''
+    if source_signal:
+        add_check('source_signal', '票据来源为策略信号，需复核研究假设', 'review', 8, False)
+        if signal_severity == 'high' and signal_score >= 85:
+            add_check('signal_strength', '源信号为高分信号，但仍不等于交易指令', 'review', 5, False)
+        else:
+            add_check('signal_strength', '源信号强度不足或非 high', 'review', 12, False)
+    else:
+        add_check('source_signal', '票据非信号生成，缺少信号证据链', 'review', 10, False)
+
+    score = min(100, int(score))
+    level = risk_level(score)
+    if blockers:
+        recommendation = 'BLOCK_MANUAL_HANDOFF'
+    elif ticket.get('approval_state') != 'approved':
+        recommendation = 'NEEDS_APPROVAL'
+    elif score >= 60:
+        recommendation = 'NEEDS_SECOND_REVIEW'
+    else:
+        recommendation = 'MANUAL_HANDOFF_ALLOWED_AFTER_OPERATOR_RECHECK'
+
+    preflight = [
+        '确认交易所子账户，不使用主账户',
+        '确认 API 无提现权限且固定 IP 白名单已配置',
+        '确认单笔金额 <= 20 USDT',
+        '确认交易对、方向、数量、价格、滑点预算',
+        '确认策略信号只是研究证据，不是自动交易指令',
+        '确认 Kill Switch 状态与人工执行票据一致',
+        '人工在交易所侧操作后必须回填外部订单号、成交价、成交数量',
+    ]
+    return {
+        'status': 'ok',
+        'ticket_id': ticket_id,
+        'risk_score': score,
+        'risk_level': level,
+        'recommendation': recommendation,
+        'blockers': blockers,
+        'warnings': warnings,
+        'checks': checks,
+        'preflight': preflight,
+        'ticket': ticket,
+        'account': account,
+        'source_signal': source_signal,
+        'safety': 'risk engine only; no auto approval and no exchange submission',
+        'time_utc': now(),
+    }
+
+
+def risk_dashboard_payload(limit: int = 100) -> Dict[str, Any]:
+    tickets = rows('SELECT * FROM trade_ready_tickets ORDER BY id DESC LIMIT ?', (limit,))
+    evaluations = []
+    for t in tickets:
+        try:
+            evaluations.append(evaluate_ticket_risk(int(t['id'])))
+        except Exception as exc:
+            evaluations.append({'ticket_id': t.get('id'), 'status': 'error', 'error': str(exc)})
+    critical = [x for x in evaluations if x.get('risk_level') == 'critical']
+    high = [x for x in evaluations if x.get('risk_level') == 'high']
+    blocked = [x for x in evaluations if x.get('recommendation') == 'BLOCK_MANUAL_HANDOFF']
+    return {'status': 'ok', 'total': len(evaluations), 'critical': len(critical), 'high': len(high), 'blocked': len(blocked), 'evaluations': evaluations, 'time_utc': now()}
+
+
 @router.get('/status')
 def status() -> Dict[str, Any]:
     return {
         'status': 'ok',
-        'version': '16.7-signal-to-trade-readiness-ticket',
+        'version': '16.8-readiness-risk-rule-engine',
         'kill_switch': 'on' if kill_switch_on() else 'off',
         'hard_limit_usdt_first_stage': '20',
         'readiness_checks': readiness_checks(),
-        'scope': 'approval tickets and manual handoff only',
+        'scope': 'approval tickets, risk scoring and manual handoff only',
         'signal_linking': 'strategy signals can create ticket drafts only; no auto approval and no exchange submission',
+        'risk_engine': {'score_range': '0-100', 'levels': ['low', 'medium', 'high', 'critical'], 'recommendations': ['BLOCK_MANUAL_HANDOFF', 'NEEDS_APPROVAL', 'NEEDS_SECOND_REVIEW', 'MANUAL_HANDOFF_ALLOWED_AFTER_OPERATOR_RECHECK']},
         'not_supported': ['autonomous order submission', 'custody of secrets', 'withdrawals', 'bypass approvals'],
     }
 
@@ -257,12 +409,23 @@ def create_ticket(req: ReadinessTicketCreate) -> Dict[str, Any]:
         cur = conn.execute('INSERT INTO trade_ready_tickets (account_id,symbol,side,order_type,amount,price,max_quote_value,estimated_quote_value,risk_tier,approval_state,ticket_state,response_json,risk_note,created_at,updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (req.account_id, req.symbol, req.side, req.order_type, req.amount, req.price, req.max_quote_value, str(estimated), 'critical', 'pending', 'draft', '{}', risk_note, ts, ts))
         ticket_id = int(cur.lastrowid)
     db.audit('trade_ready_ticket_create', 'trade_ready_ticket', str(ticket_id), req.model_dump(), 'success', 'critical', 'pending')
-    return row('SELECT * FROM trade_ready_tickets WHERE id=?', (ticket_id,)) or {'id': ticket_id}
+    ticket = row('SELECT * FROM trade_ready_tickets WHERE id=?', (ticket_id,)) or {'id': ticket_id}
+    return {**ticket, 'risk': evaluate_ticket_risk(ticket_id)}
 
 
 @router.get('/tickets')
 def list_tickets(limit: int = 100) -> List[Dict[str, Any]]:
     return rows('SELECT * FROM trade_ready_tickets ORDER BY id DESC LIMIT ?', (limit,))
+
+
+@router.get('/tickets/{ticket_id}/risk')
+def ticket_risk(ticket_id: int) -> Dict[str, Any]:
+    return evaluate_ticket_risk(ticket_id)
+
+
+@router.get('/risk-dashboard')
+def risk_dashboard(limit: int = 100) -> Dict[str, Any]:
+    return risk_dashboard_payload(limit=limit)
 
 
 @router.get('/signals/open')
@@ -278,23 +441,16 @@ def create_ticket_from_signal(req: SignalTicketCreate) -> Dict[str, Any]:
     payload = signal.get('payload') or {}
     symbol = normalize_symbol_for_ticket(signal.get('symbol') or payload.get('symbol') or 'BTCUSDT')
     side = infer_side(signal, req.side_override)
-    note = '; '.join([
-        f'source_signal_id={req.signal_id}',
-        f'signal_type={signal.get("signal_type")}',
-        f'signal_severity={signal.get("severity")}',
-        f'signal_score={signal.get("score")}',
-        payload.get('summary', ''),
-        payload.get('risk_note', ''),
-        req.note,
-    ])
+    note = '; '.join([f'source_signal_id={req.signal_id}', f'signal_type={signal.get("signal_type")}', f'signal_severity={signal.get("severity")}', f'signal_score={signal.get("score")}', payload.get('summary', ''), payload.get('risk_note', ''), req.note])
     draft_req = ReadinessTicketCreate(account_id=req.account_id, symbol=symbol, side=side, order_type=req.order_type, amount=req.amount, price=req.price, max_quote_value=req.max_quote_value, note=note)
     ticket = create_ticket(draft_req)
+    ticket_id = int(ticket['id'])
     with db.connect() as conn:
         response = {'source_signal': signal, 'created_from_signal_at': now(), 'operator': req.operator}
-        conn.execute('UPDATE trade_ready_tickets SET response_json=?, updated_at=? WHERE id=?', (jd(response), now(), ticket['id']))
-    db.audit('trade_ready_signal_to_ticket', 'trade_ready_ticket', str(ticket['id']), {'signal_id': req.signal_id, 'account_id': req.account_id, 'side': side, 'symbol': symbol}, 'success', 'critical', 'pending')
-    updated = row('SELECT * FROM trade_ready_tickets WHERE id=?', (ticket['id'],)) or ticket
-    return {'status': 'success', 'ticket': updated, 'source_signal': signal, 'safety': 'draft only; requires approval and manual handoff; no exchange order was submitted'}
+        conn.execute('UPDATE trade_ready_tickets SET response_json=?, updated_at=? WHERE id=?', (jd(response), now(), ticket_id))
+    db.audit('trade_ready_signal_to_ticket', 'trade_ready_ticket', str(ticket_id), {'signal_id': req.signal_id, 'account_id': req.account_id, 'side': side, 'symbol': symbol}, 'success', 'critical', 'pending')
+    updated = row('SELECT * FROM trade_ready_tickets WHERE id=?', (ticket_id,)) or ticket
+    return {'status': 'success', 'ticket': updated, 'source_signal': signal, 'risk': evaluate_ticket_risk(ticket_id), 'safety': 'draft only; requires approval and manual handoff; no exchange order was submitted'}
 
 
 @router.post('/tickets/{ticket_id}/decision', dependencies=[Depends(require_key)])
@@ -302,10 +458,14 @@ def decide_ticket(ticket_id: int, req: ReadinessDecision) -> Dict[str, Any]:
     ticket = row('SELECT * FROM trade_ready_tickets WHERE id=?', (ticket_id,))
     if not ticket:
         raise HTTPException(status_code=404, detail='ticket not found')
+    risk = evaluate_ticket_risk(ticket_id)
+    if req.decision == 'approved' and risk.get('recommendation') == 'BLOCK_MANUAL_HANDOFF':
+        raise HTTPException(status_code=400, detail='risk engine blocks approval; resolve blockers first')
     with db.connect() as conn:
         conn.execute('UPDATE trade_ready_tickets SET approval_state=?, updated_at=? WHERE id=?', (req.decision, now(), ticket_id))
-    db.audit('trade_ready_ticket_decision', 'trade_ready_ticket', str(ticket_id), req.model_dump(), 'success', 'critical', req.decision)
-    return row('SELECT * FROM trade_ready_tickets WHERE id=?', (ticket_id,)) or {'id': ticket_id}
+    db.audit('trade_ready_ticket_decision', 'trade_ready_ticket', str(ticket_id), {'decision': req.decision, 'operator': req.operator, 'note': req.note, 'risk_score': risk.get('risk_score'), 'recommendation': risk.get('recommendation')}, 'success', 'critical', req.decision)
+    updated = row('SELECT * FROM trade_ready_tickets WHERE id=?', (ticket_id,)) or {'id': ticket_id}
+    return {**updated, 'risk': evaluate_ticket_risk(ticket_id)}
 
 
 @router.post('/tickets/{ticket_id}/issue-manual-ticket', dependencies=[Depends(require_key)])
@@ -315,16 +475,19 @@ def issue_manual_ticket(ticket_id: int, req: ReadinessTicketIssue) -> Dict[str, 
         raise HTTPException(status_code=404, detail='ticket not found')
     if ticket['approval_state'] != 'approved':
         raise HTTPException(status_code=400, detail='ticket must be approved first')
+    risk = evaluate_ticket_risk(ticket_id)
+    if risk.get('recommendation') in {'BLOCK_MANUAL_HANDOFF', 'NEEDS_APPROVAL'}:
+        raise HTTPException(status_code=400, detail=f'risk engine blocks handoff: {risk.get("recommendation")}')
     if kill_switch_on():
         raise HTTPException(status_code=400, detail='kill switch is ON')
     phrase = f'ISSUE MANUAL TICKET {ticket_id}'
     if req.confirm_phrase != phrase:
         raise HTTPException(status_code=400, detail=f'exact confirmation phrase required: {phrase}')
     account = row('SELECT * FROM trade_ready_accounts WHERE id=?', (ticket['account_id'],)) or {}
-    manual_ticket = {'ticket_id': ticket_id, 'exchange': account.get('exchange'), 'market_type': account.get('market_type'), 'symbol': ticket['symbol'], 'side': ticket['side'], 'order_type': ticket['order_type'], 'amount': ticket['amount'], 'price': ticket['price'], 'max_quote_value': ticket['max_quote_value'], 'risk_note': ticket['risk_note'], 'operator': req.operator, 'created_at_utc': now(), 'after_manual_action': 'Record external reference with /mark-external-done.'}
+    manual_ticket = {'ticket_id': ticket_id, 'exchange': account.get('exchange'), 'market_type': account.get('market_type'), 'symbol': ticket['symbol'], 'side': ticket['side'], 'order_type': ticket['order_type'], 'amount': ticket['amount'], 'price': ticket['price'], 'max_quote_value': ticket['max_quote_value'], 'risk': risk, 'risk_note': ticket['risk_note'], 'operator': req.operator, 'created_at_utc': now(), 'after_manual_action': 'Record external reference with /mark-external-done.'}
     with db.connect() as conn:
         conn.execute('UPDATE trade_ready_tickets SET ticket_state=?, response_json=?, updated_at=? WHERE id=?', ('manual_ticket_issued', jd(manual_ticket), now(), ticket_id))
-    db.audit('trade_ready_manual_ticket_issued', 'trade_ready_ticket', str(ticket_id), {'operator': req.operator}, 'success', 'critical', 'approved')
+    db.audit('trade_ready_manual_ticket_issued', 'trade_ready_ticket', str(ticket_id), {'operator': req.operator, 'risk_score': risk.get('risk_score'), 'recommendation': risk.get('recommendation')}, 'success', 'critical', 'approved')
     return {'status': 'success', 'manual_ticket': manual_ticket}
 
 
