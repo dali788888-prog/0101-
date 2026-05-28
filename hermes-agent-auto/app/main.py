@@ -67,7 +67,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '15.6-live-trace-market-dashboard',
+        'version': '15.7-websocket-market-depth-trades',
     }
 
 
@@ -119,6 +119,11 @@ def rwa_scaffold_ui() -> str:
 @app.get('/commercial-os-ui', response_class=HTMLResponse)
 def commercial_os_ui() -> str:
     return html_file('commercial_os_ui.html', '<h1>Commercial OS UI file not found.</h1>')
+
+
+@app.get('/market-ws-ui', response_class=HTMLResponse)
+def market_ws_ui() -> str:
+    return html_file('market_ws_ui.html', '<h1>Market WebSocket UI file not found.</h1>')
 
 
 @app.post('/tron/permissions', response_model=TronPermissionDraftOut)
