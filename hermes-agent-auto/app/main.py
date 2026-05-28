@@ -25,6 +25,7 @@ from app.operator_chat import router as operator_chat_router
 from app.agent_runs import router as agent_runs_router
 from app.exchange_market import router as exchange_market_router
 from app.strategy_signals import router as strategy_signals_router
+from app.trade_readiness import router as trade_readiness_router
 from app.config import get_settings
 from app.scheduler import HermesScheduler
 from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
@@ -60,6 +61,7 @@ app.include_router(operator_chat_router)
 app.include_router(agent_runs_router)
 app.include_router(exchange_market_router)
 app.include_router(strategy_signals_router)
+app.include_router(trade_readiness_router)
 
 
 @app.get('/health')
@@ -69,7 +71,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '16.3-scheduled-signal-automation',
+        'version': '16.4-trade-readiness-gate',
     }
 
 
