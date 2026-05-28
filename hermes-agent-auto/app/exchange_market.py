@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Dict, List
+
+import requests
+from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel, Field
+
+from app.config import get_settings
+from app import db
+
+router = APIRouter(prefix='/exchange-market', tags=['Exchange Realtime Market Dashboard'])
+
+
+def require_key(x_hermes_api_key: str = Header(default='')) -> None:
+    settings = get_settings()
+    if settings.hermes_agent_api_key and x_hermes_api_key != settings.hermes_agent_api_key:
+        raise HTTPException(status_code=401, detail='Invalid API key')
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class PriceRequest(BaseModel):
+    providers: List[str] = Field(default_factory=lambda: ['binance', 'okx', 'bybit', 'gate'])
+    symbols: List[str] = Field(default_factory=lambda: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'])
+
+
+class CandleRequest(BaseModel):
+    provider: str = 'binance'
+    symbol: str = 'BTCUSDT'
+    interval: str = '1m'
+    limit: int = Field(default=120, ge=10, le=500)
+
+
+def normalize(provider: str, symbol: str) -> str:
+    s = symbol.replace('/', '').replace('-', '').replace('_', '').upper()
+    if provider == 'okx':
+        if '-' in symbol:
+            return symbol.upper()
+        if s.endswith('USDT'):
+            return s[:-4] + '-USDT'
+    if provider == 'gate':
+        if '_' in symbol:
+            return symbol.upper()
+        if s.endswith('USDT'):
+            return s[:-4] + '_USDT'
+    return s
+
+
+def get_price(provider: str, symbol: str) -> Dict[str, Any]:
+    p = provider.lower()
+    s = normalize(p, symbol)
+    if p == 'binance':
+        data = requests.get(f'https://api.binance.com/api/v3/ticker/24hr?symbol={s}', timeout=18).json()
+        if 'lastPrice' not in data:
+            raise RuntimeError(str(data))
+        return {'provider': p, 'symbol': s, 'price': data['lastPrice'], 'change_pct': data.get('priceChangePercent'), 'volume': data.get('volume'), 'time_utc': now()}
+    if p == 'okx':
+        data = requests.get(f'https://www.okx.com/api/v5/market/ticker?instId={s}', timeout=18).json()
+        item = (data.get('data') or [None])[0]
+        if not item:
+            raise RuntimeError(str(data))
+        return {'provider': p, 'symbol': s, 'price': item.get('last'), 'change_pct': None, 'volume': item.get('vol24h'), 'time_utc': now()}
+    if p == 'bybit':
+        data = requests.get(f'https://api.bybit.com/v5/market/tickers?category=spot&symbol={s}', timeout=18).json()
+        item = ((data.get('result') or {}).get('list') or [None])[0]
+        if not item:
+            raise RuntimeError(str(data))
+        return {'provider': p, 'symbol': s, 'price': item.get('lastPrice'), 'change_pct': item.get('price24hPcnt'), 'volume': item.get('volume24h'), 'time_utc': now()}
+    if p == 'gate':
+        data = requests.get(f'https://api.gateio.ws/api/v4/spot/tickers?currency_pair={s}', timeout=18).json()
+        item = data[0] if isinstance(data, list) and data else None
+        if not item:
+            raise RuntimeError(str(data))
+        return {'provider': p, 'symbol': s, 'price': item.get('last'), 'change_pct': item.get('change_percentage'), 'volume': item.get('base_volume'), 'time_utc': now()}
+    raise RuntimeError(f'unsupported provider={provider}')
+
+
+def get_candles(provider: str, symbol: str, interval: str, limit: int) -> Dict[str, Any]:
+    p = provider.lower()
+    s = normalize(p, symbol)
+    if p == 'binance':
+        raw = requests.get(f'https://api.binance.com/api/v3/klines?symbol={s}&interval={interval}&limit={limit}', timeout=20).json()
+        candles = [{'t': int(x[0]), 'open': x[1], 'high': x[2], 'low': x[3], 'close': x[4], 'volume': x[5]} for x in raw]
+    elif p == 'okx':
+        bar = {'1m':'1m','5m':'5m','15m':'15m','1h':'1H','4h':'4H','1d':'1D'}.get(interval, interval)
+        data = requests.get(f'https://www.okx.com/api/v5/market/candles?instId={s}&bar={bar}&limit={limit}', timeout=20).json()
+        candles = [{'t': int(x[0]), 'open': x[1], 'high': x[2], 'low': x[3], 'close': x[4], 'volume': x[5]} for x in reversed(data.get('data') or [])]
+    elif p == 'bybit':
+        iv = {'1m':'1','5m':'5','15m':'15','1h':'60','4h':'240','1d':'D'}.get(interval, interval)
+        data = requests.get(f'https://api.bybit.com/v5/market/kline?category=spot&symbol={s}&interval={iv}&limit={limit}', timeout=20).json()
+        candles = [{'t': int(x[0]), 'open': x[1], 'high': x[2], 'low': x[3], 'close': x[4], 'volume': x[5]} for x in reversed(((data.get('result') or {}).get('list') or []))]
+    elif p == 'gate':
+        data = requests.get(f'https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair={s}&interval={interval}&limit={limit}', timeout=20).json()
+        candles = [{'t': int(float(x[0]))*1000, 'volume': x[1], 'close': x[2], 'high': x[3], 'low': x[4], 'open': x[5]} for x in data]
+    else:
+        raise RuntimeError(f'unsupported provider={provider}')
+    return {'provider': p, 'symbol': s, 'interval': interval, 'limit': limit, 'candles': candles, 'time_utc': now()}
+
+
+@router.post('/prices', dependencies=[Depends(require_key)])
+def prices(req: PriceRequest) -> Dict[str, Any]:
+    results = []
+    errors = []
+    for provider in req.providers:
+        for symbol in req.symbols:
+            try:
+                results.append(get_price(provider, symbol))
+            except Exception as exc:
+                errors.append({'provider': provider, 'symbol': symbol, 'error': str(exc)})
+    db.audit('exchange_market_prices', 'exchange_market', 'multi', {'providers': req.providers, 'symbols': req.symbols, 'errors': len(errors)}, 'success' if not errors else 'partial', 'low', 'not_required')
+    return {'status': 'success' if not errors else 'partial', 'results': results, 'errors': errors, 'time_utc': now()}
+
+
+@router.post('/candles', dependencies=[Depends(require_key)])
+def candles(req: CandleRequest) -> Dict[str, Any]:
+    try:
+        result = get_candles(req.provider, req.symbol, req.interval, req.limit)
+        db.audit('exchange_market_candles', 'exchange_market', f'{req.provider}:{req.symbol}', req.model_dump(), 'success', 'low', 'not_required')
+        return {'status': 'success', **result}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
