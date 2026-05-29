@@ -184,7 +184,7 @@ def run_selftest(req: SelfTestRequest) -> Dict[str, Any]:
 
 @router.get('/status')
 def status() -> Dict[str, Any]:
-    return {'status': 'ok', 'version': '20.3-full-system-selftest', 'features': ['ui asset check', 'home dom reference check', 'backend dashboard direct check', 'route manifest', 'operator notification'], 'safety': 'read-only by default'}
+    return {'status': 'ok', 'version': '20.3-full-system-selftest', 'features': ['ui asset check', 'home dom reference check', 'backend dashboard direct check', 'route manifest', 'operator notification', 'powershell-friendly bodyless run endpoint'], 'safety': 'read-only by default'}
 
 
 @router.get('/manifest')
@@ -195,6 +195,13 @@ def manifest() -> Dict[str, Any]:
 @router.post('/run', dependencies=[Depends(require_key)])
 def run(req: SelfTestRequest) -> Dict[str, Any]:
     return run_selftest(req)
+
+
+@router.get('/run-default', dependencies=[Depends(require_key)])
+def run_default(level: str = 'deep', include_network_market: bool = False, sync_operator: bool = True) -> Dict[str, Any]:
+    if level not in {'quick', 'deep'}:
+        raise HTTPException(status_code=400, detail='level must be quick or deep')
+    return run_selftest(SelfTestRequest(level=level, include_network_market=include_network_market, include_protected_writes=False, sync_operator=sync_operator))
 
 
 @router.get('/runs')
