@@ -8,6 +8,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from app import db
+from app.config import get_settings
+from app.scheduler import HermesScheduler
+from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
+from app.tron_ops import approve_tron_permission_draft, create_tron_permission_draft, get_tron_permission_payload, list_tron_permission_drafts, mark_tron_permission_executed
+
 from app.asset_os import router as asset_os_router
 from app.asset_ext import router as asset_ext_router
 from app.quant_bot import router as quant_bot_router
@@ -35,10 +40,7 @@ from app.ops_workflow import router as ops_workflow_router
 from app.diagnostics_center import router as diagnostics_center_router
 from app.system_map import router as system_map_router
 from app.acceptance_center import router as acceptance_center_router
-from app.config import get_settings
-from app.scheduler import HermesScheduler
-from app.schemas import TronPermissionDraftCreate, TronPermissionDraftOut, TronPermissionExecutionMark
-from app.tron_ops import approve_tron_permission_draft, create_tron_permission_draft, get_tron_permission_payload, list_tron_permission_drafts, mark_tron_permission_executed
+from app.system_selftest import router as system_selftest_router
 
 settings = get_settings()
 scheduler = HermesScheduler()
@@ -53,33 +55,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
-app.include_router(asset_os_router)
-app.include_router(asset_ext_router)
-app.include_router(quant_bot_router)
-app.include_router(quant_ext_router)
-app.include_router(quant_market_router)
-app.include_router(quant_live_predict_router)
-app.include_router(quant_emergency_router)
-app.include_router(rwa_mine_router)
-app.include_router(rwa_scaffold_router)
-app.include_router(rwa_codegen_router)
-app.include_router(rwa_quality_router)
-app.include_router(rwa_fixit_router)
-app.include_router(commercial_os_router)
-app.include_router(operator_chat_router)
-app.include_router(agent_runs_router)
-app.include_router(exchange_market_router)
-app.include_router(strategy_signals_router)
-app.include_router(trade_readiness_router)
-app.include_router(trade_lifecycle_router)
-app.include_router(paper_trading_router)
-app.include_router(portfolio_risk_router)
-app.include_router(release_gate_router)
-app.include_router(ops_automation_router)
-app.include_router(ops_workflow_router)
-app.include_router(diagnostics_center_router)
-app.include_router(system_map_router)
-app.include_router(acceptance_center_router)
+for router in [
+    asset_os_router, asset_ext_router, quant_bot_router, quant_ext_router, quant_market_router,
+    quant_live_predict_router, quant_emergency_router, rwa_mine_router, rwa_scaffold_router,
+    rwa_codegen_router, rwa_quality_router, rwa_fixit_router, commercial_os_router,
+    operator_chat_router, agent_runs_router, exchange_market_router, strategy_signals_router,
+    trade_readiness_router, trade_lifecycle_router, paper_trading_router, portfolio_risk_router,
+    release_gate_router, ops_automation_router, ops_workflow_router, diagnostics_center_router,
+    system_map_router, acceptance_center_router, system_selftest_router,
+]:
+    app.include_router(router)
 
 
 @app.get('/health')
@@ -89,7 +74,7 @@ def health() -> dict:
         'app': settings.app_name,
         'search_provider': settings.search_provider,
         'model': settings.ollama_model,
-        'version': '20.2-complete-module-cockpit',
+        'version': '20.3-full-system-selftest',
     }
 
 
@@ -108,114 +93,40 @@ def legacy_ui() -> str:
     return '<h1>Legacy UI disabled</h1><p>已取消旧版入口，请使用首页侧边栏。</p>'
 
 
-@app.get('/acceptance-ui', response_class=HTMLResponse)
-def acceptance_ui() -> str:
-    return html_file('acceptance_ui.html', '<h1>Acceptance UI file not found.</h1>')
+_UI_FILES = {
+    '/acceptance-ui': 'acceptance_ui.html',
+    '/diagnostics-ui': 'diagnostics_ui.html',
+    '/system-map-ui': 'system_map_ui.html',
+    '/ops-automation-ui': 'ops_automation_ui.html',
+    '/release-gate-ui': 'release_gate_ui.html',
+    '/portfolio-risk-ui': 'portfolio_risk_ui.html',
+    '/paper-trading-ui': 'paper_trading_ui.html',
+    '/asset-os-ui': 'asset_os_ui.html',
+    '/tron-ui': 'tron_ui.html',
+    '/quant-ui': 'quant_ui.html',
+    '/quant-risk-ui': 'quant_risk_ui.html',
+    '/rwa-mine-ui': 'rwa_mine_ui.html',
+    '/rwa-scaffold-ui': 'rwa_scaffold_ui.html',
+    '/commercial-os-ui': 'commercial_os_ui.html',
+    '/market-ws-ui': 'market_ws_ui.html',
+    '/market-matrix-ui': 'market_matrix_ui.html',
+    '/strategy-signals-ui': 'strategy_signals_ui.html',
+    '/signal-workspace-ui': 'signal_workspace_ui.html',
+    '/trade-readiness-ui': 'trade_readiness_ui_v168.html',
+    '/trade-lifecycle-ui': 'trade_lifecycle_ui.html',
+    '/trade-readiness-v167-ui': 'trade_readiness_ui_v167.html',
+    '/trade-readiness-v165-ui': 'trade_readiness_ui.html',
+}
 
 
-@app.get('/diagnostics-ui', response_class=HTMLResponse)
-def diagnostics_ui() -> str:
-    return html_file('diagnostics_ui.html', '<h1>Diagnostics UI file not found.</h1>')
+def make_ui_route(file_name: str):
+    def route() -> str:
+        return html_file(file_name, f'<h1>{file_name} not found.</h1>')
+    return route
 
 
-@app.get('/system-map-ui', response_class=HTMLResponse)
-def system_map_ui() -> str:
-    return html_file('system_map_ui.html', '<h1>System Map UI file not found.</h1>')
-
-
-@app.get('/ops-automation-ui', response_class=HTMLResponse)
-def ops_automation_ui() -> str:
-    return html_file('ops_automation_ui.html', '<h1>Ops Automation UI file not found.</h1>')
-
-
-@app.get('/release-gate-ui', response_class=HTMLResponse)
-def release_gate_ui() -> str:
-    return html_file('release_gate_ui.html', '<h1>Release Gate UI file not found.</h1>')
-
-
-@app.get('/portfolio-risk-ui', response_class=HTMLResponse)
-def portfolio_risk_ui() -> str:
-    return html_file('portfolio_risk_ui.html', '<h1>Portfolio Risk UI file not found.</h1>')
-
-
-@app.get('/paper-trading-ui', response_class=HTMLResponse)
-def paper_trading_ui() -> str:
-    return html_file('paper_trading_ui.html', '<h1>Paper Trading UI file not found.</h1>')
-
-
-@app.get('/asset-os-ui', response_class=HTMLResponse)
-def asset_os_ui() -> str:
-    return html_file('asset_os_ui.html', '<h1>AssetOps OS UI file not found.</h1>')
-
-
-@app.get('/tron-ui', response_class=HTMLResponse)
-def tron_ui() -> str:
-    return html_file('tron_ui.html', '<h1>TRON UI file not found.</h1>')
-
-
-@app.get('/quant-ui', response_class=HTMLResponse)
-def quant_ui() -> str:
-    return html_file('quant_ui.html', '<h1>Quant AI Robot UI file not found.</h1>')
-
-
-@app.get('/quant-risk-ui', response_class=HTMLResponse)
-def quant_risk_ui() -> str:
-    return html_file('quant_risk_ui.html', '<h1>Quant Risk UI file not found.</h1>')
-
-
-@app.get('/rwa-mine-ui', response_class=HTMLResponse)
-def rwa_mine_ui() -> str:
-    return html_file('rwa_mine_ui.html', '<h1>RWA Mine UI file not found.</h1>')
-
-
-@app.get('/rwa-scaffold-ui', response_class=HTMLResponse)
-def rwa_scaffold_ui() -> str:
-    return html_file('rwa_scaffold_ui.html', '<h1>RWA Scaffold UI file not found.</h1>')
-
-
-@app.get('/commercial-os-ui', response_class=HTMLResponse)
-def commercial_os_ui() -> str:
-    return html_file('commercial_os_ui.html', '<h1>Commercial OS UI file not found.</h1>')
-
-
-@app.get('/market-ws-ui', response_class=HTMLResponse)
-def market_ws_ui() -> str:
-    return html_file('market_ws_ui.html', '<h1>Market WebSocket UI file not found.</h1>')
-
-
-@app.get('/market-matrix-ui', response_class=HTMLResponse)
-def market_matrix_ui() -> str:
-    return html_file('market_matrix_ui.html', '<h1>Market Matrix UI file not found.</h1>')
-
-
-@app.get('/strategy-signals-ui', response_class=HTMLResponse)
-def strategy_signals_ui() -> str:
-    return html_file('strategy_signals_ui.html', '<h1>Strategy Signals UI file not found.</h1>')
-
-
-@app.get('/signal-workspace-ui', response_class=HTMLResponse)
-def signal_workspace_ui() -> str:
-    return html_file('signal_workspace_ui.html', '<h1>Signal Workspace UI file not found.</h1>')
-
-
-@app.get('/trade-readiness-ui', response_class=HTMLResponse)
-def trade_readiness_ui() -> str:
-    return html_file('trade_readiness_ui_v168.html', '<h1>Readiness v16.8 UI file not found.</h1>')
-
-
-@app.get('/trade-lifecycle-ui', response_class=HTMLResponse)
-def trade_lifecycle_ui() -> str:
-    return html_file('trade_lifecycle_ui.html', '<h1>Trade Lifecycle UI file not found.</h1>')
-
-
-@app.get('/trade-readiness-v167-ui', response_class=HTMLResponse)
-def trade_readiness_v167_ui() -> str:
-    return html_file('trade_readiness_ui_v167.html', '<h1>Readiness v16.7 UI file not found.</h1>')
-
-
-@app.get('/trade-readiness-v165-ui', response_class=HTMLResponse)
-def trade_readiness_v165_ui() -> str:
-    return html_file('trade_readiness_ui.html', '<h1>Readiness v16.5 UI file not found.</h1>')
+for path, file_name in _UI_FILES.items():
+    app.add_api_route(path, make_ui_route(file_name), methods=['GET'], response_class=HTMLResponse)
 
 
 @app.post('/tron/permissions', response_model=TronPermissionDraftOut)
